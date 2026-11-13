@@ -19,6 +19,7 @@ use crate::app::AppState;
 use crate::config::{ProviderAuthConfig, ProviderAuthType, ProviderConfig, ProviderType};
 use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
+use crate::payload::sse::WireEvent as Event;
 use crate::request_capture::RequestCaptureSession;
 use crate::settings::normalize_pricing_model_key;
 use crate::transforms::{self, Phase, TransformRuleConfig};
@@ -30,11 +31,9 @@ use crate::users::{
     REQUEST_LOG_STATUS_SUCCESS,
 };
 use axum::Json;
-use axum::extract::State;
-use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Request, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::{IntoResponse, Response, Sse};
+use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -102,10 +101,8 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     state.metrics.render()
 }
 
-fn api_stream_keep_alive() -> KeepAlive {
-    KeepAlive::new()
-        .interval(Duration::from_secs(15))
-        .text("heartbeat")
+fn api_stream_keep_alive() -> &'static [u8] {
+    crate::payload::sse::HEARTBEAT
 }
 
 struct DownstreamGone(std::sync::Arc<AdmittedRequestTaskState>);
@@ -136,10 +133,8 @@ async fn join_while_client_present<T: Send + 'static>(
     }
 }
 
-fn messages_stream_keep_alive() -> KeepAlive {
-    KeepAlive::new()
-        .interval(Duration::from_secs(15))
-        .event(Event::default().event("ping").data(r#"{"type":"ping"}"#))
+fn messages_stream_keep_alive() -> &'static [u8] {
+    crate::payload::sse::PING
 }
 
 const CODEX_BASE_INSTRUCTIONS: &str = "You are Codex, a coding agent. Follow the user's instructions and repository guidance. Inspect the workspace before editing, preserve unrelated changes, make scoped changes, and verify completed work with the tools provided by the client.";
@@ -234,19 +229,6 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
     .into_response())
 }
 
-/// SE1e: a body rejected before decoding uses the endpoint's native envelope.
-fn native_json_body(body: Result<Json<Value>, JsonRejection>) -> AppResult<Value> {
-    body.map(|Json(body)| body).map_err(|rejection| {
-        let status = rejection.status();
-        let code = if status == StatusCode::PAYLOAD_TOO_LARGE {
-            "request_too_large"
-        } else {
-            "invalid_json"
-        };
-        AppError::new(status, code, rejection.body_text())
-    })
-}
-
 /// SE1e: the body-limit layer rejects an oversized `Content-Length` before any
 /// handler runs, so its plain-text 413 is rendered natively here. Runs inside
 /// the request-id layers, which supply the canonical id.
@@ -289,12 +271,15 @@ pub(crate) async fn native_body_limit_middleware(
     response
 }
 
-pub async fn create_response(
+pub(crate) async fn create_response(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Result<Json<Value>, JsonRejection>,
+    request: Request,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, native_json_body(body)?, None).await
+    let headers = request.headers().clone();
+    let auth = auth_tenant(&headers, &state).await?;
+    let crate::payload::JsonBody(body) =
+        crate::payload::JsonBody::from_request(request, &state).await?;
+    create_response_inner(state, headers, auth, body, None).await
 }
 
 pub(crate) async fn create_response_prefer_websocket(
@@ -303,16 +288,17 @@ pub(crate) async fn create_response_prefer_websocket(
     body: Value,
     turn: crate::upstream_websocket::ResponsesWsTurn,
 ) -> AppResult<Response> {
-    create_response_inner(state, headers, body, Some(turn)).await
+    let auth = auth_tenant(&headers, &state).await?;
+    create_response_inner(state, headers, auth, body, Some(turn)).await
 }
 
 async fn create_response_inner(
     state: AppState,
     headers: HeaderMap,
+    auth: crate::auth::AuthResult,
     body: Value,
     ws_turn: Option<crate::upstream_websocket::ResponsesWsTurn>,
 ) -> AppResult<Response> {
-    let auth = auth_tenant(&headers, &state).await?;
     let request_id = extract_request_id(&headers);
     // Session starts before decode so the body is deep-cloned only when a
     // capture session exists. The top-level "stream" bool is exactly what the
@@ -387,7 +373,7 @@ async fn create_response_inner(
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
     let watch = DownstreamGone(task_state.clone());
-    let handle = tokio::spawn({
+    let handle = crate::payload::spawn({
         let task_state = task_state.clone();
         async move {
             forward_nonstream_typed_with_task_state(
@@ -408,18 +394,19 @@ async fn create_response_inner(
         }
     });
     let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
-    let mut response = Json(value).into_response();
+    let mut response = crate::payload::json_response(value);
     crate::error::append_forwarded_headers(&mut response, forwarded_headers);
     Ok(response)
 }
 
-pub async fn create_chat_completions(
+pub(crate) async fn create_chat_completions(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Result<Json<Value>, JsonRejection>,
+    request: Request,
 ) -> AppResult<Response> {
-    let body = native_json_body(body)?;
+    let headers = request.headers().clone();
     let auth = auth_tenant(&headers, &state).await?;
+    let crate::payload::JsonBody(body) =
+        crate::payload::JsonBody::from_request(request, &state).await?;
     let request_id = extract_request_id(&headers);
     let capture_session = state
         .request_capture
@@ -475,7 +462,7 @@ pub async fn create_chat_completions(
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
     let watch = DownstreamGone(task_state.clone());
-    let handle = tokio::spawn({
+    let handle = crate::payload::spawn({
         let task_state = task_state.clone();
         async move {
             forward_nonstream_typed_with_task_state(
@@ -496,30 +483,24 @@ pub async fn create_chat_completions(
         }
     });
     let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
-    let mut response = Json(value).into_response();
+    let mut response = crate::payload::json_response(value);
     crate::error::append_forwarded_headers(&mut response, forwarded_headers);
     Ok(response)
 }
 
-pub async fn create_messages(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Result<Json<Value>, JsonRejection>,
-) -> Response {
+pub(crate) async fn create_messages(State(state): State<AppState>, request: Request) -> Response {
+    let headers = request.headers().clone();
     let request_id = canonical_request_id(&headers);
     let wire_request_id = messages_wire_request_id(&request_id);
-    let body = match native_json_body(body) {
-        Ok(body) => body,
-        Err(err) => {
-            let mut response = anthropic_error_response(err, Some(&wire_request_id));
-            insert_messages_request_id_header(&mut response, &wire_request_id);
-            return response;
-        }
-    };
-    let mut response = match create_messages_inner(state, headers, body, request_id).await {
-        Ok(response) => response,
-        Err(err) => anthropic_error_response(err, Some(&wire_request_id)),
-    };
+    let result = async {
+        let auth = auth_tenant(&headers, &state).await?;
+        let crate::payload::JsonBody(body) =
+            crate::payload::JsonBody::from_request(request, &state).await?;
+        create_messages_inner(state, headers, auth, body, request_id).await
+    }
+    .await;
+    let mut response =
+        result.unwrap_or_else(|error| anthropic_error_response(error, Some(&wire_request_id)));
     insert_messages_request_id_header(&mut response, &wire_request_id);
     response
 }
@@ -551,10 +532,10 @@ pub(super) fn insert_messages_request_id_header(response: &mut Response, request
 async fn create_messages_inner(
     state: AppState,
     headers: HeaderMap,
+    auth: crate::auth::AuthResult,
     body: Value,
     request_id: String,
 ) -> AppResult<Response> {
-    let auth = auth_tenant(&headers, &state).await?;
     let request_id = Some(request_id);
     let capture_session = state
         .request_capture
@@ -611,7 +592,7 @@ async fn create_messages_inner(
     let session_id = extract_client_session_id(&headers);
     let task_state = std::sync::Arc::new(AdmittedRequestTaskState::new(std::time::Instant::now()));
     let watch = DownstreamGone(task_state.clone());
-    let handle = tokio::spawn({
+    let handle = crate::payload::spawn({
         let task_state = task_state.clone();
         async move {
             forward_nonstream_typed_with_task_state(
@@ -632,7 +613,7 @@ async fn create_messages_inner(
         }
     });
     let (value, forwarded_headers) = join_while_client_present(handle, watch).await?;
-    let mut response = Json(value).into_response();
+    let mut response = crate::payload::json_response(value);
     crate::error::append_forwarded_headers(&mut response, forwarded_headers);
     Ok(response)
 }

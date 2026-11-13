@@ -11,6 +11,8 @@ use rquickjs::context::EvalOptions;
 use rquickjs::{Context, Ctx, Exception, Function, Runtime};
 use serde_json::{Value, json};
 use std::cell::Cell;
+use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -99,6 +101,7 @@ pub struct SandboxInvocation {
     pub config: Value,
     pub state: Value,
     pub upstream_provider_type: Option<String>,
+    pub(crate) payload: Option<Arc<crate::payload::Payload>>,
 }
 
 /// Payload disposition after a successful invocation (CJS-JS-4, CJS-JS-6).
@@ -115,30 +118,72 @@ pub struct SandboxOutcome {
     pub state: Value,
 }
 
-/// Glue evaluated after the transform source. It receives the ctx JSON string,
+/// Captures host functions before the user source runs. It receives the ctx JSON string,
 /// dispatches to the global `transform`, classifies the return value, and
 /// serializes the outcome together with the final `ctx.state`.
-const INVOKE_GLUE: &str = r#"(function (ctxJson) {
+const INVOKE_GLUE: &str = r#"(function () {
   "use strict";
-  var ctx = JSON.parse(ctxJson);
-  if (typeof transform !== "function") {
-    throw new Error("global 'transform' is not a function");
+  const hostRead = globalThis.__monoize_read_text;
+  delete globalThis.__monoize_read_text;
+  const handles = new WeakMap();
+  const getHandle = handles.get.bind(handles);
+  const setHandle = handles.set.bind(handles);
+  const stringify = JSON.stringify;
+  const parse = JSON.parse;
+  const isArray = Array.isArray;
+  const freeze = Object.freeze;
+  const keys = Object.keys;
+  const isSafeInteger = Number.isSafeInteger;
+  const min = Math.min;
+  Monoize.isLargeText = value => getHandle(value) !== undefined;
+  Monoize.readText = function (value, offset, length) {
+    const handle = getHandle(value);
+    if (handle === undefined) throw new TypeError("expected a large text handle");
+    if (!isSafeInteger(offset) || offset < 0 || !isSafeInteger(length) || length < 0) {
+      throw new RangeError("offset and length must be non-negative safe integers");
+    }
+    return hostRead(handle, offset, min(length, 65536));
+  };
+  function project(value, shape) {
+    if (typeof shape === "number") {
+      const handle = freeze({ byteLength: shape });
+      setHandle(handle, value);
+      return handle;
+    }
+    if (shape !== null) {
+      for (const key of keys(shape)) value[key] = project(value[key], shape[key]);
+    }
+    return value;
   }
-  var ret = transform(ctx);
-  var out;
-  if (ret === undefined) {
-    out = { t: "data", data: ctx.data };
-  } else if (ret === null) {
-    out = { t: "null" };
-  } else if (Array.isArray(ret)) {
-    out = { t: "array", items: ret };
-  } else if (typeof ret === "object") {
-    out = { t: "data", data: ret };
-  } else {
-    out = { t: "invalid", type: typeof ret };
-  }
-  return JSON.stringify({ out: out, state: ctx.state === undefined ? {} : ctx.state });
-})"#;
+  return function (ctxJson) {
+    const ctx = parse(ctxJson);
+    ctx.data = project(ctx.data, ctx.shape);
+    delete ctx.shape;
+    if (typeof transform !== "function") {
+      throw new Error("global 'transform' is not a function");
+    }
+    var ret = transform(ctx);
+    var out;
+    if (ret === undefined) {
+      out = { t: "data", data: ctx.data };
+    } else if (ret === null) {
+      out = { t: "null" };
+    } else if (isArray(ret)) {
+      out = { t: "array", items: ret };
+    } else if (typeof ret === "object") {
+      out = { t: "data", data: ret };
+    } else {
+      out = { t: "invalid", type: typeof ret };
+    }
+    const state = stringify(ctx.state === undefined ? {} : ctx.state, function (_, value) {
+      if (getHandle(value) !== undefined) throw new TypeError("large text handles cannot persist in ctx.state");
+      return value;
+    });
+    return stringify({ out: out, state: parse(state) }, function (_, value) {
+      return getHandle(value) ?? value;
+    });
+  };
+})()"#;
 
 /// Glue for save-time validation (CJS-VAL-3, CJS-VAL-4).
 const VALIDATE_GLUE: &str = r#"(function () {
@@ -209,13 +254,14 @@ pub async fn run_transform(
     http: Option<reqwest::Client>,
     limits: SandboxLimits,
 ) -> Result<SandboxOutcome, String> {
-    let _permit = sandbox_semaphore()
+    let permit = sandbox_semaphore()
         .acquire()
         .await
         .map_err(|_| "sandbox semaphore closed".to_string())?;
     let handle = tokio::runtime::Handle::current();
     let kind = invocation.kind;
     let raw = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         run_invocation_blocking(&invocation, http, &limits, handle)
     })
     .await
@@ -230,15 +276,17 @@ pub async fn validate_source(
     source: String,
     limits: SandboxLimits,
 ) -> Result<Option<Value>, String> {
-    let _permit = sandbox_semaphore()
+    let permit = sandbox_semaphore()
         .acquire()
         .await
         .map_err(|_| "sandbox semaphore closed".to_string())?;
     let handle = tokio::runtime::Handle::current();
-    let raw =
-        tokio::task::spawn_blocking(move || run_validation_blocking(&source, &limits, handle))
-            .await
-            .map_err(|error| format!("sandbox task failed: {error}"))??;
+    let raw = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        run_validation_blocking(&source, &limits, handle)
+    })
+    .await
+    .map_err(|error| format!("sandbox task failed: {error}"))??;
 
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|error| format!("sandbox produced invalid validation JSON: {error}"))?;
@@ -268,7 +316,7 @@ fn parse_outcome(kind: &'static str, raw: &str) -> Result<SandboxOutcome, String
         .get_mut("state")
         .map(Value::take)
         .unwrap_or_else(|| json!({}));
-    let out = parsed
+    let mut out = parsed
         .get_mut("out")
         .map(Value::take)
         .ok_or_else(|| "sandbox outcome is missing 'out'".to_string())?;
@@ -277,8 +325,8 @@ fn parse_outcome(kind: &'static str, raw: &str) -> Result<SandboxOutcome, String
     let data = match (kind, tag) {
         (_, "data") => {
             let data = out
-                .get("data")
-                .cloned()
+                .get_mut("data")
+                .map(Value::take)
                 .ok_or_else(|| "sandbox outcome is missing 'data'".to_string())?;
             if !data.is_object() {
                 return Err("transform result payload must be an object".to_string());
@@ -287,10 +335,9 @@ fn parse_outcome(kind: &'static str, raw: &str) -> Result<SandboxOutcome, String
         }
         ("stream", "null") => SandboxData::Dropped,
         ("stream", "array") => {
-            let items = out["items"]
-                .as_array()
-                .cloned()
-                .ok_or_else(|| "sandbox outcome is missing 'items'".to_string())?;
+            let Value::Array(items) = out["items"].take() else {
+                return Err("sandbox outcome is missing 'items'".into());
+            };
             if items.iter().any(|item| !item.is_object()) {
                 return Err("every element of a stream fan-out array must be an object".to_string());
             }
@@ -325,15 +372,21 @@ fn run_invocation_blocking(
 ) -> Result<String, String> {
     let deadline = Instant::now() + limits.timeout;
     let (runtime, context) = build_sandbox(limits, deadline)?;
-    let ctx_json = serde_json::to_string(&json!({
-        "phase": invocation.phase,
-        "kind": invocation.kind,
-        "data": invocation.data,
-        "config": invocation.config,
-        "state": invocation.state,
-        "upstream_provider_type": invocation.upstream_provider_type,
-    }))
-    .map_err(|error| format!("failed to serialize sandbox context: {error}"))?;
+    let shape = invocation.payload.as_ref().map_or(Value::Null, |payload| {
+        large_text_shape(payload, &invocation.data)
+    });
+    let ctx_json = bounded_json(
+        &json!({
+            "phase": invocation.phase,
+            "kind": invocation.kind,
+            "data": invocation.data,
+            "shape": shape,
+            "config": invocation.config,
+            "state": invocation.state,
+            "upstream_provider_type": invocation.upstream_provider_type,
+        }),
+        limits.memory_limit_bytes / 4,
+    )?;
 
     let result = context.with(|ctx| -> Result<String, String> {
         install_host_bridges(
@@ -344,16 +397,151 @@ fn run_invocation_blocking(
             deadline,
             handle,
         )?;
-        eval_source(&ctx, &invocation.source)?;
+        install_large_text_bridge(&ctx, invocation.payload.clone())?;
         let glue: Function = ctx
             .eval(INVOKE_GLUE)
             .map_err(|error| describe_js_error(&ctx, error, "internal glue"))?;
+        eval_source(&ctx, &invocation.source)?;
         glue.call((ctx_json.as_str(),))
             .map_err(|error| describe_js_error(&ctx, error, "transform invocation"))
     });
     drop(context);
     drop(runtime);
     result
+}
+
+fn install_large_text_bridge<'js>(
+    ctx: &Ctx<'js>,
+    payload: Option<Arc<crate::payload::Payload>>,
+) -> Result<(), String> {
+    let read = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, marker: String, offset: f64, length: usize| {
+            let bytes = read_large_text(payload.as_deref(), &marker, offset as u64, length)
+                .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+            rquickjs::TypedArray::<u8>::new(ctx, bytes)
+        },
+    )
+    .map_err(|error| describe_js_error(ctx, error, "large text bridge"))?;
+    ctx.globals()
+        .set("__monoize_read_text", read)
+        .map_err(|error| describe_js_error(ctx, error, "large text bridge"))
+}
+
+fn large_text_shape(payload: &crate::payload::Payload, value: &Value) -> Value {
+    use crate::payload::Part;
+    match value {
+        Value::String(text) => {
+            let mut disk = false;
+            let bytes = payload
+                .parts(text)
+                .map(|part| match part {
+                    Part::Inline(text) => text.len() as u64,
+                    Part::Disk(spool) => {
+                        disk = true;
+                        spool.len()
+                    }
+                })
+                .sum::<u64>();
+            if disk {
+                Value::from(bytes)
+            } else {
+                Value::Null
+            }
+        }
+        Value::Object(fields) => {
+            let shape: serde_json::Map<_, _> = fields
+                .iter()
+                .filter_map(|(key, value)| {
+                    let shape = large_text_shape(payload, value);
+                    (!shape.is_null()).then(|| (key.clone(), shape))
+                })
+                .collect();
+            if shape.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(shape)
+            }
+        }
+        Value::Array(items) => {
+            let shape: serde_json::Map<_, _> = items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    let shape = large_text_shape(payload, item);
+                    (!shape.is_null()).then(|| (index.to_string(), shape))
+                })
+                .collect();
+            if shape.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(shape)
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
+fn read_large_text(
+    payload: Option<&crate::payload::Payload>,
+    marker: &str,
+    mut offset: u64,
+    length: usize,
+) -> std::io::Result<Vec<u8>> {
+    use crate::payload::Part;
+    let mut bytes = Vec::with_capacity(length);
+    let Some(payload) = payload else {
+        return Ok(bytes);
+    };
+    for part in payload.parts(marker) {
+        let remaining = length - bytes.len();
+        if remaining == 0 {
+            break;
+        }
+        match part {
+            Part::Inline(text) if offset >= text.len() as u64 => offset -= text.len() as u64,
+            Part::Disk(spool) if offset >= spool.len() => offset -= spool.len(),
+            Part::Inline(text) => {
+                let text = &text.as_bytes()[offset as usize..];
+                bytes.extend_from_slice(&text[..text.len().min(remaining)]);
+                offset = 0;
+            }
+            Part::Disk(spool) => {
+                let mut file = spool.open()?;
+                file.seek(SeekFrom::Start(offset))?;
+                file.take(remaining as u64).read_to_end(&mut bytes)?;
+                offset = 0;
+            }
+        }
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn bounded_json(value: &impl serde::Serialize, max: usize) -> Result<String, String> {
+    struct Limited {
+        bytes: Vec<u8>,
+        max: usize,
+    }
+    impl std::io::Write for Limited {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.max.saturating_sub(self.bytes.len()) {
+                return Err(std::io::Error::other(
+                    "sandbox context exceeds its byte budget",
+                ));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = Limited {
+        bytes: Vec::new(),
+        max,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|error| error.to_string())?;
+    Ok(String::from_utf8(writer.bytes).expect("serde_json writes UTF-8"))
 }
 
 fn run_validation_blocking(
@@ -366,6 +554,9 @@ fn run_validation_blocking(
     let result = context.with(|ctx| -> Result<String, String> {
         // CJS-VAL-3: fetch is installed but always throws during validation.
         install_host_bridges(&ctx, "validation", None, limits, deadline, handle)?;
+        install_large_text_bridge(&ctx, None)?;
+        ctx.eval::<Function, _>(INVOKE_GLUE)
+            .map_err(|error| describe_js_error(&ctx, error, "internal glue"))?;
         eval_source(&ctx, source)?;
         let glue: Function = ctx
             .eval(VALIDATE_GLUE)

@@ -18,8 +18,12 @@ pub(super) async fn run_image_stream_downstream(
     ensure_balance_before_forward_for_attempts(&state, &auth, &attempts).await?;
     let (meta, capture) = meta.capture(&state, &auth, true).await;
     let (tx, rx) = mpsc::channel::<Event>(64);
-    let _ = tx.send(Event::default().comment("heartbeat")).await;
-    tokio::spawn(async move {
+    let _ = tx
+        .send(Event::Bytes(bytes::Bytes::from_static(
+            crate::payload::sse::HEARTBEAT,
+        )))
+        .await;
+    crate::payload::spawn(async move {
         let task_state = AdmittedRequestTaskState::new(Instant::now());
         task_state.set_stream(true);
         let mut sink = ImageStreamSink::new(family, tx);
@@ -31,7 +35,11 @@ pub(super) async fn run_image_stream_downstream(
             task_state: &task_state,
         };
         match execute_stream_collected_image_typed(context, req, Some(&mut sink)).await {
-            Ok((response, _)) => sink.send_completed(&response).await,
+            Ok((response, _)) => {
+                if let Err(error) = sink.send_completed(&response).await {
+                    sink.send_error(&error).await;
+                }
+            }
             Err(error) => sink.send_error(&error).await,
         }
         sink.send_done().await;
@@ -42,9 +50,7 @@ pub(super) async fn run_image_stream_downstream(
 fn image_sse_response(rx: mpsc::Receiver<Event>) -> Response {
     let stream =
         tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
-    let mut response = Sse::new(stream)
-        .keep_alive(api_stream_keep_alive())
-        .into_response();
+    let mut response = crate::payload::sse::response(stream, api_stream_keep_alive());
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-cache, no-transform"),
@@ -72,7 +78,8 @@ pub(super) async fn run_image_request(
     let request_id = meta.request_id.clone();
     let request_ip = meta.request_ip.clone();
     let mut worker = tokio::task::JoinSet::new();
-    worker.spawn(async move {
+    let payload = crate::payload::current().unwrap_or_default();
+    worker.spawn(crate::payload::scoped(payload, async move {
         execute_image_subrequest_typed(
             ImageExecutionContext {
                 state: &worker_state,
@@ -84,7 +91,7 @@ pub(super) async fn run_image_request(
             req,
         )
         .await
-    });
+    }));
     match worker
         .join_next()
         .await

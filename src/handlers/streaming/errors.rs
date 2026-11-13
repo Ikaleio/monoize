@@ -65,10 +65,8 @@ pub(super) async fn emit_stream_error_if_needed(
         }
     };
     let data = body.to_string();
-    let event = match event_name {
-        Some(name) => Event::default().event(name).data(&data),
-        None => Event::default().data(&data),
-    };
+    let event = Event::json_with_payload(event_name, &body, None)
+        .expect("writing JSON into memory cannot fail");
     if let Some(frames) = capture_frames {
         frames
             .record(match event_name {
@@ -84,7 +82,7 @@ pub(super) async fn emit_stream_error_if_needed(
         if let Some(frames) = capture_frames {
             frames.record("data: [DONE]\n\n".to_string()).await;
         }
-        let _ = tx.send(Event::default().data("[DONE]")).await;
+        let _ = tx.send(Event::plain("[DONE]")).await;
     }
 }
 

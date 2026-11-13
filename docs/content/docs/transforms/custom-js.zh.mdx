@@ -81,6 +81,15 @@ function transform(ctx) {
 `Monoize.fetch(url, options)` 发起 HTTP 请求并返回 `{ status, headers, body }`。
 `console.log`、`console.info`、`console.warn` 和 `console.error` 写入服务器日志。
 
+## 大负载
+
+`ctx.data` 中超过 64 KiB 的字符串可能以句柄形式出现，包括内联 Base64 和数据 URL。
+用 `Monoize.isLargeText(value)` 识别句柄。用 `value.byteLength` 读取 UTF-8 字节数。
+`Monoize.readText(value, offset, length)` 返回最多 64 KiB 的 `Uint8Array`。
+偏移量从第 0 个字节开始。读取在字符串末尾停止。
+可以在 `ctx.data` 或返回的负载中保留、移动、删除或替换句柄。
+Monoize 会将保留的句柄还原为原始文本。句柄在本次调用结束后失效，不能放入 `ctx.state`。
+
 ## 沙箱限制
 
 沙箱没有文件系统、进程、定时器和模块 API。

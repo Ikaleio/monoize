@@ -13,6 +13,7 @@ mod wire;
 
 use crate::error::AppResult;
 use crate::handlers::routing::now_ts;
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::encode::openai_responses::{
     encode_response_checked, encode_usage, synthesized_response_controls,
 };
@@ -24,7 +25,6 @@ use crate::urp::{
     RESPONSES_RESPONSE_SOURCE_EXTRA_KEY, RESPONSES_STREAM_START_SOURCE_EXTRA_KEY, UrpResponse,
     UrpStreamEvent, Usage, is_internal_control, is_internal_key,
 };
-use axum::response::sse::Event;
 use nodes::{NodeState, OpenMessage, OutputItem};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;

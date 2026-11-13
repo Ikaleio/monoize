@@ -49,14 +49,27 @@ pub fn is_text_mime(mime: &str) -> bool {
 }
 
 pub fn decode_text(data: &str) -> Result<String, String> {
-    String::from_utf8(decode_bytes(data)?)
-        .map_err(|_| "The document is not valid UTF-8 text.".into())
+    if crate::payload::has_large_text(data) {
+        return crate::payload::spool_utf8(base64_reader(data)?)
+            .map_err(|error| format!("Cannot decode the document as UTF-8: {error}"));
+    }
+    String::from_utf8(
+        STANDARD
+            .decode(data)
+            .map_err(|_| "Media data must contain valid raw Base64 bytes.")?,
+    )
+    .map_err(|_| "The document is not valid UTF-8 text.".into())
 }
 
-fn decode_bytes(data: &str) -> Result<Vec<u8>, String> {
-    STANDARD
-        .decode(data)
-        .map_err(|_| "Media data must contain valid raw Base64 bytes.".into())
+pub(crate) fn base64_reader(data: &str) -> Result<impl std::io::Read + Send + '_, String> {
+    let reader = crate::payload::text_reader(data).map_err(|error| error.to_string())?;
+    Ok(base64::read::DecoderReader::new(reader, &STANDARD))
+}
+
+pub(crate) fn validate_base64(data: &str) -> Result<(), String> {
+    std::io::copy(&mut base64_reader(data)?, &mut std::io::sink())
+        .map(|_| ())
+        .map_err(|error| format!("Media data must contain valid raw Base64 bytes: {error}"))
 }
 
 pub fn parse_data_url(url: &str) -> Option<(&str, &str)> {
@@ -66,7 +79,11 @@ pub fn parse_data_url(url: &str) -> Option<(&str, &str)> {
 }
 
 pub fn infer_mime(data: &str, filename: Option<&str>) -> String {
-    if let Ok(bytes) = decode_bytes(data) {
+    use std::io::Read;
+    let mut bytes = Vec::with_capacity(12);
+    if let Ok(reader) = base64_reader(data)
+        && reader.take(12).read_to_end(&mut bytes).is_ok()
+    {
         let mime = if bytes.starts_with(b"%PDF-") {
             Some("application/pdf")
         } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -182,7 +199,7 @@ fn image(
     check_resource(metadata, target)?;
     match source {
         ImageSource::Base64 { media_type, data } => {
-            decode_bytes(data)?;
+            validate_base64(data)?;
             let parsed_mime = media_type
                 .parse::<mime::Mime>()
                 .map_err(|_| "Image MIME type is invalid.".to_string())?;
@@ -270,7 +287,7 @@ fn file(
     check_resource(metadata, target)?;
     match source {
         FileSource::Base64 { media_type, data } => {
-            decode_bytes(data)?;
+            validate_base64(data)?;
             if mime_essence(media_type) == "application/octet-stream" || media_type.is_empty() {
                 *media_type = infer_mime(data, metadata.filename.as_deref());
             }
@@ -721,7 +738,7 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                         }
                     }
                     AudioSource::Base64 { media_type, data } => {
-                        decode_bytes(data)?;
+                        validate_base64(data)?;
                         if media_type == "audio/unknown" || !is_audio_mime(media_type) {
                             return Err("Audio format is unknown. Supply the actual format before conversion.".into());
                         }

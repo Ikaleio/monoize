@@ -94,13 +94,16 @@ impl DynTransform for CustomTransformEntry {
             TransformError::Apply(format!("custom transform '{}': {detail}", self.id))
         };
 
+        let limits = SandboxLimits::from_env();
+        let budget = limits.memory_limit_bytes / 4;
         let (kind, payload) = match &data {
-            UrpData::Request(request) => ("request", serde_json::to_value(&**request)),
-            UrpData::Response(response) => ("response", serde_json::to_value(&**response)),
-            UrpData::Stream(event) => ("stream", serde_json::to_value(&**event)),
+            UrpData::Request(request) => ("request", sandbox::bounded_json(&**request, budget)),
+            UrpData::Response(response) => ("response", sandbox::bounded_json(&**response, budget)),
+            UrpData::Stream(event) => ("stream", sandbox::bounded_json(&**event, budget)),
         };
-        let payload =
-            payload.map_err(|error| apply_error(format!("serialize payload: {error}")))?;
+        let payload = payload.map_err(apply_error)?;
+        let payload = serde_json::from_str(&payload)
+            .map_err(|error| apply_error(format!("serialize payload: {error}")))?;
 
         let invocation = sandbox::SandboxInvocation {
             transform_id: self.id.clone(),
@@ -108,6 +111,7 @@ impl DynTransform for CustomTransformEntry {
             kind,
             phase,
             data: payload,
+            payload: crate::payload::current(),
             config: config.clone(),
             state: state.js_state.clone(),
             upstream_provider_type: context
@@ -116,13 +120,9 @@ impl DynTransform for CustomTransformEntry {
                 .and_then(|value| value.as_str().map(str::to_string)),
         };
 
-        let outcome = sandbox::run_transform(
-            invocation,
-            Some(context.http_client.clone()),
-            SandboxLimits::from_env(),
-        )
-        .await
-        .map_err(apply_error)?;
+        let outcome = sandbox::run_transform(invocation, Some(context.http_client.clone()), limits)
+            .await
+            .map_err(apply_error)?;
 
         state.js_state = outcome.state;
 

@@ -271,7 +271,7 @@ fn is_projected_member(accumulated: &str, terminal: &str) -> bool {
 }
 
 fn merge_string_field(field: &str, left: &str, right: &str) -> Result<String, String> {
-    if left.is_empty() || left == right {
+    if left.is_empty() || crate::payload::text_equal(left, right)? {
         Ok(right.to_string())
     } else if right.is_empty() {
         Ok(left.to_string())

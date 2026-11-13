@@ -1,8 +1,8 @@
 use super::{Node, NodeHeader, ProviderProtocol, TerminalNode, UrpResponse, UrpStreamEvent};
 use crate::error::AppResult;
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::stream_encode::{self, StreamEncodeOptions, anthropic::MessagesStreamEncoder};
 use crate::urp::{decode::anthropic as decode, encode::anthropic as encode};
-use axum::response::{IntoResponse, Sse, sse::Event};
 use serde_json::{Value, json};
 use std::{collections::HashMap, convert::Infallible, time::Instant};
 use tokio::sync::mpsc;
@@ -88,7 +88,7 @@ async fn sse_json(mut rx: mpsc::Receiver<Event>) -> Vec<Value> {
     while let Some(event) = rx.recv().await {
         events.push(Ok::<Event, Infallible>(event));
     }
-    let response = Sse::new(futures_util::stream::iter(events)).into_response();
+    let response = crate::payload::sse::response(futures_util::stream::iter(events), b"");
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();

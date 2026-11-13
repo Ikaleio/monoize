@@ -104,19 +104,28 @@ pub fn serialized_json_len(value: &Value) -> usize {
 /// An upstream JSON request body serialized once into an exactly sized
 /// buffer (FP6j-2). The bytes equal `serde_json::to_vec` of the source value,
 /// so the caller can drop that value before awaiting the upstream response.
-pub struct JsonBody(Vec<u8>);
+pub struct JsonBody {
+    bytes: Vec<u8>,
+    large: Option<Value>,
+}
 
 impl JsonBody {
     pub fn new(value: &Value) -> Self {
+        if crate::payload::contains_large(value) {
+            return Self {
+                bytes: Vec::new(),
+                large: Some(value.clone()),
+            };
+        }
         let mut bytes = Vec::with_capacity(serialized_json_len(value));
         serde_json::to_writer(&mut bytes, value)
             .expect("serializing a JSON value into memory cannot fail");
-        Self(bytes)
+        Self { bytes, large: None }
     }
 
     /// UTF-8 text of the body, for transports that send text frames.
     pub fn into_string(self) -> String {
-        String::from_utf8(self.0).expect("serde_json always writes UTF-8")
+        String::from_utf8(self.bytes).expect("serde_json always writes UTF-8")
     }
 }
 
@@ -251,8 +260,13 @@ fn json_request(
     // Same header and bytes that `RequestBuilder::json` sets on a fresh request.
     let req = client
         .post(upstream_url(provider, path)?)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body.0);
+        .header(reqwest::header::CONTENT_TYPE, "application/json");
+    let req = match body.large {
+        Some(value) => req.body(reqwest::Body::wrap_stream(crate::payload::json_stream(
+            value,
+        ))),
+        None => req.body(body.bytes),
+    };
     authorize(req, provider, auth_value, extra_headers)
 }
 
@@ -312,11 +326,27 @@ async fn exchange(req: reqwest::RequestBuilder) -> Result<reqwest::Response, Ups
 
 async fn read_json_body(resp: reqwest::Response) -> Result<Value, UpstreamCallError> {
     let status = resp.status();
-    let text = resp
-        .text()
+    if let Some(payload) = crate::payload::current() {
+        use futures_util::TryStreamExt as _;
+        let stream = resp
+            .bytes_stream()
+            .map_err(|error| crate::payload::ReadError::Transport(error_chain(&error)));
+        return crate::payload::read_json(stream, payload, crate::payload::WIRE_LIMIT)
+            .await
+            .map_err(|error| {
+                let kind = match error {
+                    crate::payload::ReadError::Transport(_) => UpstreamErrorKind::Network,
+                    _ => UpstreamErrorKind::Http,
+                };
+                UpstreamCallError::new(kind, Some(status), error.to_string())
+            });
+    }
+    let bytes = crate::bounded_response::read_response_body_with_limit(resp, 50 * 1024 * 1024)
         .await
-        .map_err(|err| transport_error(Some(status), &err))?;
-    serde_json::from_str(&text).map_err(|err| {
+        .map_err(|error| {
+            UpstreamCallError::new(UpstreamErrorKind::Network, Some(status), error.to_string())
+        })?;
+    serde_json::from_slice(&bytes).map_err(|err| {
         UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), err.to_string())
     })
 }
@@ -350,7 +380,18 @@ async fn non_success_upstream_error(
     status: StatusCode,
 ) -> UpstreamCallError {
     let forwarded_headers = forwarded_response_headers(resp.headers());
-    let text = resp.text().await.unwrap_or_default();
+    let mut chunks = resp.bytes_stream();
+    use futures_util::StreamExt as _;
+    let mut text = Vec::new();
+    const ERROR_MAX: usize = 64 * 1024;
+    while let Some(Ok(chunk)) = chunks.next().await {
+        let take = chunk.len().min(ERROR_MAX - text.len());
+        text.extend_from_slice(&chunk[..take]);
+        if text.len() == ERROR_MAX {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&text).into_owned();
     let info = extract_error_info(&text);
     let (message, source) = match info.message.clone() {
         Some(message) => (message, UpstreamErrorSource::StructuredBody),

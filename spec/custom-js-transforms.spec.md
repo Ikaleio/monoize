@@ -2,7 +2,7 @@
 
 ## 0. Status
 
-- Version: `1.1.0`
+- Version: `2.0.0`
 - Product name: Monoize
 - Scope: administrator-authored JavaScript custom transforms executed in an embedded
   QuickJS sandbox, their persistence, the admin CRUD API, registry exposure and
@@ -290,12 +290,13 @@ properties:
 | --- | --- | --- |
 | `phase` | `"request"` \| `"response"` | current pipeline phase (TF-4) |
 | `kind` | `"request"` \| `"response"` \| `"stream"` | payload surface kind |
-| `data` | object | JSON serialization of the payload (CJS-JS-2) |
+| `data` | object | JSON projection of the payload (CJS-JS-2) |
 | `config` | object | the rule's `config` value (TF-2) |
 | `state` | object | per-request mutable state (CJS-JS-5) |
 | `upstream_provider_type` | string \| null | TF-10 through TF-13 value |
 
-CJS-JS-2. `ctx.data` is the exact serde JSON serialization of the URP v2 value:
+CJS-JS-2. `ctx.data` is the serde JSON representation of the URP v2 value with
+large strings projected as described in CJS-JS-11:
 `UrpRequest` when `kind = "request"`, `UrpResponse` when `kind = "response"`, and one
 canonical `UrpStreamEvent` when `kind = "stream"`. Transform-visible surfaces are the
 same surfaces defined by `urp-transform-system.spec.md` SURF-1 through SURF-10. In a
@@ -359,6 +360,23 @@ CJS-JS-10. Host logging bridge: `console.log`, `console.info`, `console.warn`, a
 space-joined) to the server log at info, info, warn, and error levels under a
 custom-transform log target that includes the transform id. No other `console` member is
 provided.
+
+CJS-JS-11. A disk-backed UTF-8 string, including inline Base64 and data URLs, MUST
+appear as an opaque object in `ctx.data`. Its `byteLength` property is its UTF-8
+byte length. `Monoize.isLargeText(value)` MUST identify these objects.
+`Monoize.readText(value, offset, length)` MUST return a Uint8Array of up to
+65536 bytes from the requested byte offset. The offset and length MUST be
+non-negative safe integers. Reads stop at the end of the string.
+A script MAY move, remove, replace, or return the object inside the result payload,
+including in stream fan-out. The runtime MUST restore its original bytes before
+writing a provider request or client response. An opaque object MUST NOT be saved
+in `ctx.state`. These objects are valid for one invocation. For strings kept in
+memory the JavaScript representation remains a string.
+
+CJS-JS-12. The host MUST bound the serialized sandbox input before passing it to
+QuickJS. The maximum input size is one quarter of the configured sandbox memory
+limit. The host MUST hold an invocation permit until its blocking work has exited,
+including when the caller cancels the invocation.
 
 ## 9. Registry exposure and visibility
 

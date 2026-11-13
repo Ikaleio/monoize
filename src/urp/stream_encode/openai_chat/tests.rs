@@ -3,7 +3,6 @@
 use super::ChatStreamEncoder;
 use crate::urp::stream_encode::{self, StreamEncodeOptions};
 use crate::urp::{Node, NodeDelta, NodeHeader, TerminalNode, UrpStreamEvent};
-use axum::response::{IntoResponse, Sse};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -63,9 +62,7 @@ async fn encode_live(events: Vec<UrpStreamEvent>) -> Vec<String> {
     while let Some(event) = rx.recv().await {
         frames.push(Ok::<_, Infallible>(event));
     }
-    let body = Sse::new(futures_util::stream::iter(frames))
-        .into_response()
-        .into_body();
+    let body = crate::payload::sse::response(futures_util::stream::iter(frames), b"").into_body();
     let wire = axum::body::to_bytes(body, usize::MAX).await.unwrap();
     String::from_utf8(wire.to_vec())
         .unwrap()

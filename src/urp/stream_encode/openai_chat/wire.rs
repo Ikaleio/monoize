@@ -1,6 +1,7 @@
 //! Downstream Chat chunk emission (DC6, DC6a, DC7b, DC8).
 
 use crate::error::{AppError, AppResult};
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::stream_helpers::{
     send_plain_sse_data, send_plain_sse_json, split_json_value_by_string_patch,
 };
@@ -8,7 +9,6 @@ use crate::urp::{
     CHAT_CHOICE_EXTRA_BODY_KEY, CHAT_DELTA_EXTRA_BODY_KEY, TokenLogprob, is_internal_key,
 };
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use tokio::sync::mpsc;

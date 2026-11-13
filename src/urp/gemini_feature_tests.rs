@@ -1102,13 +1102,12 @@ fn encode_options() -> stream_encode::StreamEncodeOptions {
 }
 
 /// The JSON data of every SSE event the encoder wrote, in order.
-async fn sse_frames(rx: tokio::sync::mpsc::Receiver<axum::response::sse::Event>) -> Vec<Value> {
-    use axum::response::IntoResponse;
+async fn sse_frames(rx: tokio::sync::mpsc::Receiver<crate::payload::sse::WireEvent>) -> Vec<Value> {
     use futures_util::StreamExt;
     let body =
         tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
     let bytes = axum::body::to_bytes(
-        axum::response::Sse::new(body).into_response().into_body(),
+        crate::payload::sse::response(body, b"").into_body(),
         usize::MAX,
     )
     .await

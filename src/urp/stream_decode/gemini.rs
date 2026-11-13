@@ -5,13 +5,11 @@ mod candidate;
 mod grounding;
 mod state;
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::payload::sse::{Frames, SseError};
 use crate::urp::UrpStreamEvent;
-use axum::http::StatusCode;
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
-use state::{Flow, GeminiStreamState, decode_error};
+use state::{Flow, GeminiStreamState};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
@@ -24,24 +22,15 @@ pub(crate) async fn stream_gemini_to_urp_events(
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let mut state = GeminiStreamState::new(urp, tx, started_at, runtime_metrics);
-    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut stream = upstream_resp.bytes_stream().eventsource();
+    let mut stream = Frames::new(upstream_resp, idle_timeout_ms, false);
     loop {
-        let event = match tokio::time::timeout(idle_timeout, stream.next()).await {
+        let event = match stream.next().await {
             Ok(Some(event)) => event,
             Ok(None) => break,
-            // A finish reason already established completion; trailing silence is not a failure.
-            Err(_) if state.completed() => break,
-            Err(_) => {
-                return Err(AppError::new(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    "upstream_idle_timeout",
-                    format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-                ));
-            }
+            Err(SseError::Idle(_)) if state.completed() => break,
+            Err(error) => return Err(error.into_app()),
         };
-        let event = event.map_err(|error| decode_error(crate::error::sse_error_chain(&error)))?;
-        match state.on_sse_data(&event.data).await? {
+        match state.on_sse_data(event.data).await? {
             Flow::Continue => {}
             Flow::Done => break,
         }

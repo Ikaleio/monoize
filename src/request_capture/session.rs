@@ -4,6 +4,9 @@ impl RequestCaptureSession {
     pub(crate) async fn push_attempt(&self, mut attempt: Value) {
         let mut attempts = self.attempts.lock().await;
         let mut truncation = self.truncation.lock().await;
+        truncation.omitted_bytes = truncation
+            .omitted_bytes
+            .saturating_add(crate::payload::redact_large(&mut attempt));
         if attempts.len() >= self.limits.max_attempts {
             truncation.omitted_attempts = truncation.omitted_attempts.saturating_add(1);
             truncation.omitted_frames = truncation.omitted_frames.saturating_add(

@@ -76,6 +76,12 @@ struct SseFrameCaptureState {
 }
 
 impl SseFrameCapture {
+    pub(crate) async fn omit_frame(&self, bytes: usize) {
+        let mut inner = self.state.lock().await;
+        inner.omitted_frames = inner.omitted_frames.saturating_add(1);
+        inner.omitted_bytes = inner.omitted_bytes.saturating_add(bytes);
+    }
+
     pub(crate) fn new() -> Self {
         Self::with_limits(RequestCaptureLimits::from_env())
     }
@@ -152,7 +158,7 @@ where
     T: Send + 'static,
 {
     let capture = current_sse_capture();
-    tokio::spawn(async move {
+    crate::payload::spawn(async move {
         if let Some(capture) = capture {
             CURRENT_SSE_CAPTURE.scope(capture, future).await
         } else {
@@ -379,13 +385,25 @@ pub(crate) fn multipart_capture_object_from_upstream_fields(
                 filename,
                 content_type,
                 bytes,
-            } => CapturedMultipartPart::File {
-                name: name.clone(),
-                filename: Some(filename.clone()),
-                content_type: Some(content_type.clone()),
-                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                byte_length: bytes.len(),
-            },
+            } => {
+                use crate::urp::encode::openai_image::MultipartBytes;
+                let (data_base64, byte_length) = match bytes {
+                    MultipartBytes::Inline(bytes) => (
+                        base64::engine::general_purpose::STANDARD.encode(bytes),
+                        bytes.len(),
+                    ),
+                    MultipartBytes::Spool { data_base64, len } => {
+                        (data_base64.clone(), *len as usize)
+                    }
+                };
+                CapturedMultipartPart::File {
+                    name: name.clone(),
+                    filename: Some(filename.clone()),
+                    content_type: Some(content_type.clone()),
+                    data_base64,
+                    byte_length,
+                }
+            }
         })
         .collect();
     multipart_capture_object(&parts)
@@ -594,9 +612,7 @@ fn positive_env(name: &str, default: usize) -> usize {
 }
 
 fn serialized_len(value: &Value) -> usize {
-    serde_json::to_vec(value)
-        .map(|bytes| bytes.len())
-        .unwrap_or(usize::MAX)
+    crate::upstream::serialized_json_len(value)
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {

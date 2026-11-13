@@ -230,7 +230,7 @@ curl http://localhost:8080/v1/chat/completions \
 | `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP 监听地址 |
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite 或 PostgreSQL DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus 指标路径 |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 转发请求体上限 |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP 请求体大小上限（字节）。Responses、Chat Completions、Messages 和 Images POST 路由默认使用 `10737418240`。 |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 受信任的反向代理网段；显式设为空则禁用 |
 | `MONOIZE_UPSTREAM_PROXY_URL` | 未设置 | 节点级出站 HTTP(S) 代理；Channel 可通过 `proxy_url` 覆盖 |
 | `MONOIZE_CAP_API_ENDPOINT` | 未设置 | 外部 Cap 站点端点；未设置时使用内置 Cap 服务 |

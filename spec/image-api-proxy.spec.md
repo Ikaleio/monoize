@@ -75,7 +75,7 @@ The request body MUST use `multipart/form-data` or JSON. Other content types MUS
 | `n` | text field | NO | Must equal 1. Defaults to 1. |
 | `stream` | text field | NO | `true` or `false`. Default `false`. When `true`, the downstream response is the SSE stream defined in §5.5. |
 
-IE1. Known image options MUST map to typed image options under IG1 and IG5. Multipart `user` MUST retain its exact text and map to `UrpRequest.user`. Other text values that are JSON numbers or booleans MUST use their JSON types. Remaining unknown text fields MUST remain in `extra_body`.
+IE1. A multipart text field MUST have at most 65536 bytes. Known image options MUST map to typed image options under IG1 and IG5. Multipart `user` MUST retain its exact text and map to `UrpRequest.user`. Other text values that are JSON numbers or booleans MUST use their JSON types. Remaining unknown text fields MUST remain in `extra_body`.
 
 IE2. File fields other than `image`, `image[]`, `markup`, and `mask` MUST be ignored.
 
@@ -91,7 +91,7 @@ IE3. File upload processing:
 
 - For each uploaded file (`image`, `mask`, `markup`), Monoize MUST read the file bytes and base64-encode them.
 - The media type MUST be determined from the `Content-Type` header of the multipart part. If absent, Monoize MUST infer from file extension or default to `application/octet-stream`.
-- Maximum individual file size is bounded by the configured HTTP body limit (`unified_responses_proxy.spec.md` §C5), whose default is 50 MiB.
+- Maximum individual file size is bounded by the configured HTTP body limit (`unified_responses_proxy.spec.md` §C5), whose default for Images POST routes is 10 GiB.
 
 ## 4. Request mapping to URP
 

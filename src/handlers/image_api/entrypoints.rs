@@ -3,10 +3,12 @@ use axum::extract::Request;
 
 pub async fn create_image_generation(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
+    request: Request,
 ) -> AppResult<Response> {
+    let headers = request.headers().clone();
     let mut auth = auth_tenant(&headers, &state).await?;
+    let crate::payload::JsonBody(body) =
+        crate::payload::JsonBody::from_request(request, &state).await?;
     auth.internal_source
         .get_or_insert(crate::auth::InternalRequestSource::ImageGeneration);
     let capture_eligible = state

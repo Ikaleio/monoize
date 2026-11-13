@@ -5,8 +5,7 @@ use super::{
 };
 use super::{decode::openai_responses as decode, encode::openai_responses as encode};
 use crate::error::AppResult;
-use axum::response::IntoResponse;
-use axum::response::sse::Event;
+use crate::payload::sse::WireEvent as Event;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::time::Instant;
@@ -179,9 +178,7 @@ async fn sse_wire(mut rx: mpsc::Receiver<Event>) -> (String, Vec<Value>) {
     while let Some(event) = rx.recv().await {
         frames.push(Ok::<_, std::convert::Infallible>(event));
     }
-    let body = axum::response::Sse::new(futures_util::stream::iter(frames))
-        .into_response()
-        .into_body();
+    let body = crate::payload::sse::response(futures_util::stream::iter(frames), b"").into_body();
     let wire = String::from_utf8(
         axum::body::to_bytes(body, usize::MAX)
             .await

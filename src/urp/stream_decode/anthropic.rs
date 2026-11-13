@@ -5,13 +5,11 @@ mod json_input;
 mod state;
 mod usage;
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::payload::sse::Frames;
 use crate::urp::UrpStreamEvent;
 use crate::urp::decode::split_extra;
-use axum::http::StatusCode;
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use serde_json::Value;
 use state::{AnthropicMessagesStreamState, Flow};
 use std::collections::HashMap;
@@ -27,31 +25,10 @@ pub(crate) async fn stream_messages_to_urp_events(
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let mut state = AnthropicMessagesStreamState::new(urp, tx, started_at, runtime_metrics);
-    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut stream = upstream_resp.bytes_stream().eventsource();
+    let mut stream = Frames::new(upstream_resp, idle_timeout_ms, false);
     let mut terminal_event = None;
-    while let Some(event) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let flow = match event {
-            Ok(event) => state.on_sse_event(event).await,
-            Err(error) => {
-                state
-                    .protocol_error(
-                        "upstream_stream_decode_failed",
-                        crate::error::sse_error_chain(&error),
-                        HashMap::new(),
-                    )
-                    .await
-            }
-        };
+    while let Some(event) = stream.next().await.map_err(|error| error.into_app())? {
+        let flow = state.on_sse_event(event).await;
         match flow {
             Flow::Continue => {}
             Flow::Terminal(name) => {

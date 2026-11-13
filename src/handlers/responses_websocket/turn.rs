@@ -136,11 +136,14 @@ impl RegisteredTurn<'_> {
             oversized: prepared.oversized,
             input_bytes: self.input_bytes,
         };
-        let result = super::create_response_prefer_websocket(
-            conn.state.clone(),
-            headers,
-            Value::Object(prepared.request.clone()),
-            pipeline,
+        let result = crate::payload::scoped(
+            Arc::default(),
+            super::create_response_prefer_websocket(
+                conn.state.clone(),
+                headers,
+                Value::Object(prepared.request.clone()),
+                pipeline,
+            ),
         )
         .await;
         match result {

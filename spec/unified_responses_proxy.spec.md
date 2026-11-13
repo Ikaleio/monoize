@@ -151,7 +151,7 @@ WS12b. Steering downstream. Monoize MUST accept `response.steer` with members `t
 
 WS12c. Error frames. Every error event Monoize sends on the WebSocket MUST have the shape `{"type":"error","status":S,"error":{"type":T,"code":C,"message":M,"param":P}}`, plus `"stream_id"` for an error of a named-lane turn. Monoize MUST translate each pipeline failure of a turn into this frame: an `AppError` (status from the upstream status when present, otherwise the error status), a non-2xx JSON response `{"error":{...}}` from the per-turn handler (status = HTTP status), and an in-stream SSE `error` event, either flat `{code,message,param}` or nested `{error:{type,code,message,param}}` (status = its `status` member when numeric, otherwise derived from `error.type`: `invalid_request_error` 400, `authentication_error` 401, `permission_error` 403, `not_found_error` 404, `rate_limit_error` 429, otherwise 500). `type` defaults to `invalid_request_error` for status 400–499 and `server_error` otherwise. Error frames MUST NOT carry `sequence_number`. A turn error ends that turn only; other lanes continue.
 
-WS13. The WebSocket message and frame limit MUST default to 50 MiB, equal to the forwarding HTTP body limit in C5, and MUST be configurable with `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES`.
+WS13. The WebSocket message and frame limit MUST default to 50 MiB and MUST be configurable with `MONOIZE_RESPONSES_WS_MESSAGE_MAX_BYTES`.
 
 WS14. Per-connection resource quotas MUST default to 4096 started turns (generated, warmup, and WS18 successor turns, counted once when the turn starts executing after its preparation succeeded; interrupts, steers, and rejected events are not counted), 1073741824 cumulative inbound text bytes, and, per lane entry, 16384 retained items and 33554432 retained JSON bytes. The corresponding environment variables are `MONOIZE_RESPONSES_WS_MAX_TURNS`, `MONOIZE_RESPONSES_WS_CONNECTION_MAX_BYTES`, `MONOIZE_RESPONSES_WS_HISTORY_MAX_ITEMS`, and `MONOIZE_RESPONSES_WS_HISTORY_MAX_BYTES`.
 
@@ -228,6 +228,30 @@ C3. Monoize MUST resolve listen address from `MONOIZE_LISTEN`, default `0.0.0.0:
 C4. Monoize MUST resolve metrics endpoint path from `MONOIZE_METRICS_PATH`, default `/metrics`.
 
 C5. Monoize MUST accept downstream request bodies up to the configured HTTP body limit on forwarding endpoints (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`). `MONOIZE_HTTP_BODY_MAX_BYTES` MUST select this limit when its trimmed value is a positive base-10 integer that fits `usize`; an unset, empty, zero, negative, malformed, or overflowing value MUST select the default `52428800` bytes. Any framework-default extractor limit smaller than the selected value MUST be disabled so that the selected value is the effective limit.
+
+C5a. The HTTP POST JSON routes for Responses, Chat Completions, Messages, and the
+Images API MUST accept up to 10737418240 bytes by default, subject to C5's explicit
+environment override. Their successful upstream JSON responses and individual
+upstream SSE events MUST support the same size. Authenticate these requests before reading the body. Apply this default
+to the `/api` aliases and the Codex Responses POST alias. Other request routes
+retain C5's default. The WebSocket message limit remains governed by WS13.
+Multipart image files also use the Images POST route limit.
+
+C5b. On these routes, decode JSON and SSE with bounded input buffers. Spill decoded
+JSON string values larger than 65536 UTF-8 bytes to temporary files. Keep the
+remaining serialized JSON structure, including keys, within 4194304 bytes per
+document. Reject invalid JSON or structure that exceeds this limit before running
+transforms. JSON nesting retains the serde_json limit. Transfer large values in
+chunks of at most 65536 bytes in JSON and SSE egress. HTTP chunk boundaries MUST NOT
+change the JSON or SSE event boundaries. Apply the upstream idle timeout between
+body chunks, including while reading one SSE event.
+
+C5c. Store temporary payload files under `MONOIZE_PAYLOAD_SPOOL_DIR` when set, and
+the platform temporary directory otherwise. The process MUST release files on
+request completion, cancellation, or failure. The process-wide maximum for
+payload spool storage is `MONOIZE_PAYLOAD_SPOOL_MAX_BYTES` (default 68719476736).
+Disk and quota failures MUST return a controlled request or stream error. Capture
+and managed history MUST NOT retain request-scoped file references.
 
 C6. Monoize runs as one application process with concurrent worker tasks. Exactly one process with node role `primary` is the only supported writer for Monoize business tables (`primary-replica-deployment.spec.md`). Processes running as role `replica` share the same database read-only and ship telemetry through the primary's ingest API; direct SQL writes from any source and concurrent Monoize primary writer processes are outside the cache-coherence contract.
 
@@ -482,7 +506,7 @@ S2. HTTP Responses requests default to `store=true`. Monoize MUST consume this c
 
 S3. Monoize MUST resolve a non-null `previous_response_id` locally before routing or request transforms. The lookup scope MUST contain the authenticated tenant and API key identity. The next canonical input MUST contain the retained input, retained output, and current input in that order. Retained top-level `instructions` nodes MUST NOT carry into the next request. Current request controls MUST NOT inherit prior controls. Monoize MUST remove `previous_response_id` before upstream encoding and echo the client-supplied id in the downstream response. An unknown, expired, evicted, or differently scoped id MUST fail with HTTP 400, code `previous_response_not_found`, and param `previous_response_id`. A non-string id or a request containing both `conversation` and `previous_response_id` MUST fail with HTTP 400. `conversation` without `previous_response_id` remains native same-Responses passthrough and MUST be removed for other families.
 
-S3a. History MUST be process-local and MUST expire 30 minutes after insertion. Restart MUST discard it. One retained history MUST contain at most 4096 nodes and 33554432 serialized bytes. The cache MUST contain at most 1024 entries and 134217728 serialized bytes. Insertion MUST evict the oldest entries until both cache limits hold. Oversized histories MUST NOT be retained. A stream MUST retain history before emitting its successful terminal response event. `store=false` MUST prevent HTTP history retention but MUST NOT disable connection-local WebSocket state. Historical canonical nodes MUST retain internal metadata; downstream JSON MUST NOT be the HTTP history representation.
+S3a. History MUST be process-local and MUST expire 30 minutes after insertion. Restart MUST discard it. One retained history MUST contain at most 4096 nodes and 33554432 serialized bytes. The cache MUST contain at most 1024 entries and 134217728 serialized bytes. Insertion MUST evict the oldest entries until both cache limits hold. Oversized histories MUST NOT be retained. A stream MUST retain history before emitting its successful terminal response event. `store=false` MUST prevent HTTP history retention but MUST NOT disable connection-local WebSocket state. History containing request-scoped disk-backed strings is not retainable. Historical canonical nodes MUST retain internal metadata; downstream JSON MUST NOT be the HTTP history representation.
 
 S4. Monoize MUST accept a Responses `input` item with `type = "item_reference"` as a same-Responses provider item. It MAY be forwarded only to a selected `type=responses` upstream. A cross-family attempt MUST remove the item before encoding because Chat Completions and Messages have no equivalent reference object. Monoize MUST NOT resolve the reference locally.
 

@@ -138,7 +138,7 @@ fn precommitted_error_stream(
     request_id: Option<String>,
 ) -> ForwardEventStream {
     let (tx, rx) = mpsc::channel::<Event>(8);
-    tokio::spawn(async move {
+    crate::payload::spawn(async move {
         // `err` already holds client text: RTA-8 or a local error.
         emit_stream_error_if_needed(downstream, &err, request_id.as_deref(), false, &tx, None)
             .await;
@@ -152,7 +152,7 @@ fn precommitted_error_stream(
 pub(super) async fn commit_forward_event_stream<F, S>(
     downstream: DownstreamProtocol,
     request_id: Option<String>,
-    keep_alive: KeepAlive,
+    keep_alive: &'static [u8],
     forwarding: impl FnOnce(StreamCommit) -> F,
 ) -> AppResult<Response>
 where
@@ -168,7 +168,7 @@ where
     };
     let forwarding = forwarding(commit.clone());
     let (tx, rx) = mpsc::channel::<Event>(64);
-    tokio::spawn(async move {
+    crate::payload::spawn(async move {
         match forwarding.await {
             Ok(stream) => {
                 commit.accept(Vec::new());
@@ -205,9 +205,7 @@ where
         let _lifetime = &lifetime;
         event
     });
-    let mut response = Sse::new(body.boxed())
-        .keep_alive(keep_alive)
-        .into_response();
+    let mut response = crate::payload::sse::response(body, keep_alive);
     crate::error::append_forwarded_headers(&mut response, forwarded_headers);
     Ok(response)
 }

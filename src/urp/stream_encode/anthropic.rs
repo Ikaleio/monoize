@@ -12,6 +12,7 @@ mod nodes;
 mod wire;
 
 use crate::error::AppResult;
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::encode::anthropic::{
     input_only_media_type, messages_response_id, validate_complete_tool_inputs,
     validate_response_node, validate_response_nodes,
@@ -19,7 +20,6 @@ use crate::urp::encode::anthropic::{
 use crate::urp::stream_encode::{StreamEncodeOptions, StreamEncoder};
 use crate::urp::tool_signature::SignatureProjection;
 use crate::urp::{NodeDelta, NodeHeader, ProviderProtocol, UrpResponse, UrpStreamEvent, Usage};
-use axum::response::sse::Event;
 use nodes::NodeState;
 use serde_json::Value;
 use std::collections::HashMap;

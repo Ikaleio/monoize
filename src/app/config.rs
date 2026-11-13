@@ -1,7 +1,5 @@
 use super::*;
 
-const DEFAULT_HTTP_BODY_MAX_BYTES: usize = 50 * 1024 * 1024;
-
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub listen: String,
@@ -43,18 +41,6 @@ impl RuntimeConfig {
             node: NodeSettings::primary_default(),
         }
     }
-}
-
-pub(super) fn http_body_max_bytes() -> usize {
-    http_body_max_bytes_from_raw(std::env::var("MONOIZE_HTTP_BODY_MAX_BYTES").ok().as_deref())
-}
-
-fn http_body_max_bytes_from_raw(raw: Option<&str>) -> usize {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_HTTP_BODY_MAX_BYTES)
 }
 
 fn resolve_database_dsn() -> String {

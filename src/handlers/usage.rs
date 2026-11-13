@@ -281,7 +281,7 @@ pub(crate) async fn record_visible_output_delta(
     let mut guard = runtime_metrics.lock().await;
     guard.visible_output_bytes = guard
         .visible_output_bytes
-        .saturating_add(content.len() as u64);
+        .saturating_add(crate::payload::text_len(content) as u64);
 }
 
 pub(crate) async fn record_visible_stream_event_delta(

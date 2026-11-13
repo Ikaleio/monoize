@@ -196,8 +196,31 @@ pub enum MultipartField {
         name: String,
         filename: String,
         content_type: String,
-        bytes: Vec<u8>,
+        bytes: MultipartBytes,
     },
+}
+
+pub enum MultipartBytes {
+    Inline(Vec<u8>),
+    Spool { data_base64: String, len: u64 },
+}
+
+fn multipart_bytes(data: &str) -> Result<MultipartBytes, String> {
+    if crate::payload::has_large_text(data) {
+        let len = std::io::copy(
+            &mut crate::urp::media::base64_reader(data)?,
+            &mut std::io::sink(),
+        )
+        .map_err(|error| format!("invalid base64 image input: {error}"))?;
+        return Ok(MultipartBytes::Spool {
+            data_base64: data.to_owned(),
+            len,
+        });
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map(MultipartBytes::Inline)
+        .map_err(|error| format!("invalid base64 image input: {error}"))
 }
 
 pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartField>, String> {
@@ -240,10 +263,7 @@ pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartFi
         };
         let (media_type, bytes) = match source {
             ImageSource::Base64 { media_type, data } => {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|e| format!("invalid base64 image input: {e}"))?;
-                (media_type.clone(), bytes)
+                (media_type.clone(), multipart_bytes(data)?)
             }
             ImageSource::Url { .. } | ImageSource::FileId { .. } => {
                 return Err("image references require a JSON image edit request".to_string());
@@ -280,10 +300,18 @@ pub fn form_from_fields(fields: Vec<MultipartField>) -> Result<reqwest::multipar
                 content_type,
                 bytes,
             } => {
-                let part = reqwest::multipart::Part::bytes(bytes)
-                    .file_name(filename)
-                    .mime_str(&content_type)
-                    .map_err(|e| format!("invalid image media type: {e}"))?;
+                let part = match bytes {
+                    MultipartBytes::Inline(bytes) => reqwest::multipart::Part::bytes(bytes),
+                    MultipartBytes::Spool { data_base64, len } => {
+                        reqwest::multipart::Part::stream_with_length(
+                            reqwest::Body::wrap_stream(crate::payload::base64_stream(data_base64)),
+                            len,
+                        )
+                    }
+                }
+                .file_name(filename)
+                .mime_str(&content_type)
+                .map_err(|e| format!("invalid image media type: {e}"))?;
                 form.part(name, part)
             }
         };

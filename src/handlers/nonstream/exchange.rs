@@ -276,7 +276,7 @@ async fn collect_streamed_upstream_response(
     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
     let decode_handle = {
         let runtime_metrics = runtime_metrics.clone();
-        tokio::spawn(async move {
+        crate::payload::spawn(async move {
             stream_upstream_to_urp_events(
                 &legacy,
                 pending_request_envelope_extra,

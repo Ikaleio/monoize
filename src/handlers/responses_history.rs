@@ -28,10 +28,13 @@ impl ResponseHistoryStore {
 
     fn insert(&mut self, id: String, scope: String, nodes: Vec<urp::Node>) {
         self.cleanup();
-        let Ok(encoded) = serde_json::to_vec(&nodes) else {
+        let Ok(value) = serde_json::to_value(&nodes) else {
             return;
         };
-        let bytes = encoded.len();
+        if crate::payload::contains_large(&value) {
+            return;
+        }
+        let bytes = crate::upstream::serialized_json_len(&value);
         if nodes.len() > MAX_NODES || bytes > MAX_ENTRY_BYTES {
             return;
         }

@@ -83,11 +83,19 @@ The `ctx` object has exactly these properties:
 
 ## 4. Payload shapes
 
-`ctx.data` is the exact JSON serialization of a URP v2 value:
+`ctx.data` follows the URP v2 JSON shape:
 
 - `kind = "request"`: a `UrpRequest` object. Key fields: `model`, `input` (array of nodes), `stream`, `temperature`, `top_p`, `max_output_tokens`, `reasoning`, `tools`, `tool_choice`, `stop`, `response_format`, `user`. Unknown fields pass through at the top level (`extra_body` is flattened).
 - `kind = "response"`: a `UrpResponse` object. Key fields: `model`, `output` (array of nodes), `stop_reason`, `usage`.
 - `kind = "stream"`: one canonical `UrpStreamEvent` object with an `event` field. The `event` values are `response_start`, `node_start`, `node_delta`, `node_done`, `response_done`, `provider_control`, and `error`.
+
+
+A disk-backed string appears as an opaque handle. Check it with
+`Monoize.isLargeText(value)`. Its `byteLength` counts UTF-8 bytes.
+`Monoize.readText(value, offset, length)` returns a `Uint8Array` with up to
+65536 bytes. Offsets are zero-based byte offsets. Keep the original handle
+when forwarding a value. You can move, remove, or replace it in the result.
+The handle expires at the end of the invocation. Keep it out of `ctx.state`.
 
 ## 5. Return contracts
 

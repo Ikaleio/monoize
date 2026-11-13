@@ -448,7 +448,6 @@ mod tests {
     use crate::handlers::DownstreamProtocol;
     use crate::urp::stream_encode::{self, StreamEncodeOptions};
     use crate::urp::{self, FinishReason, OrdinaryRole};
-    use axum::response::IntoResponse;
     use serde_json::json;
     use tokio::sync::mpsc;
 
@@ -963,15 +962,14 @@ mod tests {
     }
 
     async fn sse_body(
-        mut wire_rx: mpsc::Receiver<axum::response::sse::Event>,
+        mut wire_rx: mpsc::Receiver<crate::payload::sse::WireEvent>,
     ) -> axum::body::Bytes {
         let mut frames = Vec::new();
         while let Some(frame) = wire_rx.recv().await {
             frames.push(Ok::<_, std::convert::Infallible>(frame));
         }
-        let body = axum::response::Sse::new(futures_util::stream::iter(frames))
-            .into_response()
-            .into_body();
+        let body =
+            crate::payload::sse::response(futures_util::stream::iter(frames), b"").into_body();
         axum::body::to_bytes(body, usize::MAX).await.unwrap()
     }
 

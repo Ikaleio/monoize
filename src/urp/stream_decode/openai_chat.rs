@@ -12,13 +12,11 @@ mod tests;
 mod text;
 mod tool_calls;
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::handlers::usage::{StreamChunkMetrics, record_stream_chunk_metrics};
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::payload::sse::Frames;
 use crate::urp::UrpStreamEvent;
-use axum::http::StatusCode;
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use state::{ChatStreamState, Flow};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -51,32 +49,9 @@ async fn decode_events(
     upstream_resp: reqwest::Response,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(event) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let flow = match event {
-            Ok(event) => state.on_sse_event(event).await?,
-            Err(error) => {
-                state
-                    .terminal_error(
-                        "upstream_stream_decode_failed",
-                        &crate::error::sse_error_chain(&error),
-                        None,
-                        None,
-                    )
-                    .await?;
-                Flow::Stop
-            }
-        };
+    let mut stream = Frames::new(upstream_resp, idle_timeout_ms, false);
+    while let Some(event) = stream.next().await.map_err(|error| error.into_app())? {
+        let flow = state.on_sse_event(event).await?;
         match flow {
             Flow::Continue => {}
             Flow::Done => break,

@@ -8,6 +8,7 @@ use crate::handlers::usage::{
     record_stream_response_id, record_stream_response_service_tier, record_stream_terminal_error,
     record_stream_terminal_event, record_stream_usage_if_present,
 };
+use crate::payload::sse::FrameData;
 use crate::urp::decode::openai_responses::parse_usage_from_responses;
 use crate::urp::decode::split_extra;
 use crate::urp::{
@@ -35,21 +36,22 @@ fn is_output_event(event: &str) -> bool {
 }
 
 impl ResponsesStreamDecoder {
-    pub(super) async fn on_frame(&mut self, mut event_name: String, data: String) -> Flow {
+    pub(super) async fn on_frame(&mut self, mut event_name: String, data: FrameData) -> Flow {
         if is_internal_control(&event_name) {
             if event_name == RESPONSES_DISCARD_REQUESTED_FRAME {
-                self.discard_requested = data.trim() == "true";
+                self.discard_requested =
+                    matches!(&data, FrameData::Text(text) if text.trim() == "true");
             }
             return Flow::Continue;
         }
         mark_stream_ttfb_if_needed(&mut self.started_at, &self.metrics).await;
-        if data.trim() == "[DONE]" {
+        if data.is_done() {
             record_stream_done_sentinel(&self.metrics).await;
             return Flow::End;
         }
-        let data: Value = match serde_json::from_str(&data) {
+        let data: Value = match data.into_json() {
             Ok(value) => value,
-            Err(error) => {
+            Err((error, data)) => {
                 self.release_held(None, None).await;
                 let extra_body = HashMap::from([
                     ("event_name".to_string(), json!(event_name)),

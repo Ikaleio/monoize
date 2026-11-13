@@ -97,14 +97,16 @@ impl<'a> GeminiStreamState<'a> {
         self.send(event).await;
     }
 
-    pub(super) async fn on_sse_data(&mut self, data: &str) -> AppResult<Flow> {
+    pub(super) async fn on_sse_data(
+        &mut self,
+        data: crate::payload::sse::FrameData,
+    ) -> AppResult<Flow> {
         mark_stream_ttfb_if_needed(&mut self.started_at, &self.runtime_metrics).await;
-        if data.trim() == "[DONE]" {
+        if data.is_done() {
             record_stream_done_sentinel(&self.runtime_metrics).await;
             return Ok(Flow::Done);
         }
-        let frame: Value =
-            serde_json::from_str(data).map_err(|error| decode_error(error.to_string()))?;
+        let frame: Value = data.into_json().map_err(|(error, _)| decode_error(error))?;
         self.on_frame(&frame).await?;
         Ok(Flow::Continue)
     }

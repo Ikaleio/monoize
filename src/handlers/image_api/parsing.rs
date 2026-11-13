@@ -55,9 +55,8 @@ pub(super) async fn parse_edit_request(
     if content_type == "application/json"
         || content_type.starts_with("application/") && content_type.ends_with("+json")
     {
-        let Json(body) = Json::<Value>::from_request(request, state)
-            .await
-            .map_err(|err| AppError::new(err.status(), "invalid_request", err.body_text()))?;
+        let crate::payload::JsonBody(body) =
+            crate::payload::JsonBody::from_request(request, state).await?;
         parse_json_image_edit(body, capture_eligible)
     } else if content_type == "multipart/form-data" {
         let multipart = Multipart::from_request(request, state)
@@ -158,9 +157,7 @@ fn parse_image_reference(value: &Value, field: &str) -> AppResult<urp::Node> {
                 }
                 if !media_type.starts_with("image/")
                     || data.is_empty()
-                    || base64::engine::general_purpose::STANDARD
-                        .decode(data)
-                        .is_err()
+                    || urp::media::validate_base64(data).is_err()
                 {
                     return Err(image_request_error(
                         "image_url must contain a Base64 image data URL",
@@ -231,7 +228,7 @@ async fn parse_multipart_image_edit(
     let mut mask = None;
     let mut markup = None;
     let mut capture_parts = Vec::new();
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|err| image_request_error(err.to_string()))?
@@ -259,18 +256,14 @@ async fn parse_multipart_image_edit(
             if image_markup && urp::media::mime_essence(&media_type) != "image/png" {
                 return Err(image_request_error("markup must be PNG").with_param("markup"));
             }
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|err| image_request_error(err.to_string()))?;
-            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let (data, byte_length) = read_multipart_asset(&mut field).await?;
             if capture_eligible {
                 capture_parts.push(crate::request_capture::CapturedMultipartPart::File {
                     name,
                     filename: filename.clone(),
                     content_type,
                     data_base64: data.clone(),
-                    byte_length: bytes.len(),
+                    byte_length,
                 });
             }
             let image = urp::Node::Image {
@@ -293,10 +286,21 @@ async fn parse_multipart_image_edit(
                 images.push(image);
             }
         } else if field.file_name().is_none() {
-            let text = field
-                .text()
+            let mut bytes = Vec::new();
+            while let Some(chunk) = field
+                .chunk()
                 .await
-                .map_err(|err| image_request_error(err.to_string()))?;
+                .map_err(|error| image_request_error(error.to_string()))?
+            {
+                if chunk.len() > crate::payload::CHUNK.saturating_sub(bytes.len()) {
+                    return Err(
+                        image_request_error("multipart text field exceeds 65536 bytes")
+                            .with_param(&name),
+                    );
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let text = String::from_utf8_lossy(&bytes).into_owned();
             if capture_eligible {
                 capture_parts.push(crate::request_capture::CapturedMultipartPart::Text {
                     name: name.clone(),
@@ -457,4 +461,57 @@ fn coerce_text_to_json_value(text: &str) -> Value {
         "false" => Value::Bool(false),
         _ => Value::String(text.to_string()),
     }
+}
+
+async fn read_multipart_asset(
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> AppResult<(String, usize)> {
+    use std::io::Write;
+    let mut inline = Vec::new();
+    let mut encoder = None;
+    let mut len = 0usize;
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|error| image_request_error(error.to_string()))?
+    {
+        len = len.saturating_add(chunk.len());
+        if len > crate::payload::CHUNK / 4 * 3 && encoder.is_none() {
+            let spool = crate::payload::SpoolWriter::new().map_err(spool_failure)?;
+            let mut writer = base64::write::EncoderWriter::new(
+                spool,
+                &base64::engine::general_purpose::STANDARD,
+            );
+            writer.write_all(&inline).map_err(spool_failure)?;
+            inline.clear();
+            encoder = Some(writer);
+        }
+        match &mut encoder {
+            Some(writer) => writer.write_all(&chunk).map_err(spool_failure)?,
+            None => inline.extend_from_slice(&chunk),
+        }
+    }
+    match encoder {
+        Some(mut writer) => {
+            let payload = crate::payload::current()
+                .ok_or_else(|| spool_failure(std::io::Error::other("missing payload scope")))?;
+            let spool = writer
+                .finish()
+                .and_then(|spool| spool.finish())
+                .map_err(spool_failure)?;
+            Ok((payload.insert(spool), len))
+        }
+        None => Ok((
+            base64::engine::general_purpose::STANDARD.encode(inline),
+            len,
+        )),
+    }
+}
+
+fn spool_failure(error: std::io::Error) -> AppError {
+    AppError::new(
+        StatusCode::INSUFFICIENT_STORAGE,
+        "payload_spool_failed",
+        error.to_string(),
+    )
 }

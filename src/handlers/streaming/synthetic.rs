@@ -313,7 +313,7 @@ impl StreamForward {
             upstream_response_model,
             mask_sensitive_info,
         };
-        tokio::spawn(replay.run(tx));
+        crate::payload::spawn(replay.run(tx));
         receiver_event_stream(rx)
     }
 }

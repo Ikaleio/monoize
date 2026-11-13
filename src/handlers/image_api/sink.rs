@@ -49,11 +49,8 @@ impl ImageStreamSink {
         self.partial_frames_emitted > 0 || self.completed_frames_emitted > 0
     }
 
-    async fn send_frame(&self, event_name: &str, payload: Value) {
-        let _ = self
-            .tx
-            .send(Event::default().event(event_name).data(payload.to_string()))
-            .await;
+    async fn send_frame(&self, event_name: &str, payload: Value) -> AppResult<()> {
+        crate::urp::stream_helpers::send_named_sse_json(&self.tx, event_name, payload).await
     }
 
     /// IS3: one partial frame per canonical Base64 image delta.
@@ -61,9 +58,9 @@ impl ImageStreamSink {
         &mut self,
         source: &urp::ImageSource,
         extra_body: &HashMap<String, Value>,
-    ) {
+    ) -> AppResult<()> {
         let urp::ImageSource::Base64 { data, .. } = source else {
-            return;
+            return Ok(());
         };
         let event_name = self.family.partial_event_name();
         let mut payload = Map::new();
@@ -85,12 +82,12 @@ impl ImageStreamSink {
             }
         }
         self.partial_frames_emitted += 1;
-        self.send_frame(event_name, Value::Object(payload)).await;
+        self.send_frame(event_name, Value::Object(payload)).await
     }
 
     /// IS4: one completed frame per extracted image; the last frame carries
     /// `usage` iff the sub-request produced URP usage.
-    pub(super) async fn send_completed(&mut self, resp: &urp::UrpResponse) {
+    pub(super) async fn send_completed(&mut self, resp: &urp::UrpResponse) -> AppResult<()> {
         let images = extract_images_from_response(resp);
         let total = images.len();
         for (position, image) in images.into_iter().enumerate() {
@@ -121,30 +118,32 @@ impl ImageStreamSink {
                 payload.insert("usage".to_string(), aggregated_usage_value(&aggregated));
             }
             self.completed_frames_emitted += 1;
-            self.send_frame(event_name, Value::Object(payload)).await;
+            self.send_frame(event_name, Value::Object(payload)).await?;
         }
+        Ok(())
     }
 
     /// IS6: exactly one `error` frame with the standard error object.
     pub(super) async fn send_error(&mut self, err: &AppError) {
-        self.send_frame(
-            "error",
-            json!({
-                "type": "error",
-                "error": {
-                    "message": err.message,
-                    "type": err.error_type,
-                    "code": err.code,
-                    "param": err.param,
-                }
-            }),
-        )
-        .await;
+        let _ = self
+            .send_frame(
+                "error",
+                json!({
+                    "type": "error",
+                    "error": {
+                        "message": err.message,
+                        "type": err.error_type,
+                        "code": err.code,
+                        "param": err.param,
+                    }
+                }),
+            )
+            .await;
     }
 
     /// IS5: `data: [DONE]` terminator.
     pub(super) async fn send_done(&self) {
-        let _ = self.tx.send(Event::default().data("[DONE]")).await;
+        let _ = self.tx.send(Event::plain("[DONE]")).await;
     }
 }
 

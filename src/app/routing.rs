@@ -1,4 +1,3 @@
-use super::config::http_body_max_bytes;
 use super::*;
 
 async fn canonical_request_id_middleware(
@@ -42,7 +41,6 @@ async fn replica_disabled_fallback() -> axum::response::Response {
 pub fn build_app(state: AppState) -> Router {
     let metrics_path = state.runtime.metrics_path.clone();
     let trusted_proxies = state.trusted_proxies.clone();
-    let http_body_max_bytes = http_body_max_bytes();
     let is_replica = state.node.is_replica();
     let root_api_router = build_root_api_router(&metrics_path);
     let dashboard_api_router = build_dashboard_api_router();
@@ -72,7 +70,7 @@ pub fn build_app(state: AppState) -> Router {
             crate::client_ip::canonical_client_ip_middleware,
         ))
         .layer(DefaultBodyLimit::disable())
-        .layer(RequestBodyLimitLayer::new(http_body_max_bytes))
+        .layer(axum::middleware::from_fn(payload_middleware))
         .layer(axum::middleware::from_fn(
             crate::handlers::native_body_limit_middleware,
         ))
@@ -535,4 +533,33 @@ fn build_dashboard_api_router() -> Router<AppState> {
             "/pay/notify/{payment_channel_id}",
             get(crate::recharge::handlers::pay_notify).post(crate::recharge::handlers::pay_notify),
         )
+}
+
+async fn payload_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let large = crate::payload::large_route(request.method(), request.uri().path());
+    let limit = crate::payload::http_limit(large);
+    if request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|length| length.to_str().ok())
+        .and_then(|length| length.parse::<u64>().ok())
+        .is_some_and(|length| length > limit as u64)
+    {
+        return (
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            "request body exceeds the configured size limit",
+        )
+            .into_response();
+    }
+    let (parts, body) = request.into_parts();
+    let limited = Body::new(http_body_util::Limited::new(body, limit));
+    let forward = next.run(Request::from_parts(parts, limited));
+    if large {
+        crate::payload::scoped(Arc::default(), forward).await
+    } else {
+        forward.await
+    }
 }

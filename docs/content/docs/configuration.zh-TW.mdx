@@ -15,7 +15,9 @@ description: Monoize 程序的環境變數。
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite 或 PostgreSQL DSN |
 | `DATABASE_URL` | 未設定 | `MONOIZE_DATABASE_DSN` 未設定時的備用 DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus 指標路徑 |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 轉發請求體大小上限（位元組） |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP 請求體大小上限（位元組）。Responses、Chat Completions、Messages 與 Images POST 路由預設為 `10737418240`。 |
+| `MONOIZE_PAYLOAD_SPOOL_DIR` | 系統暫存目錄 | 大型負載的暫存檔案目錄 |
+| `MONOIZE_PAYLOAD_SPOOL_MAX_BYTES` | `68719476736` | 程序的暫存負載總量上限（位元組） |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 受信任的反向代理網段；明確設為空值即停用信任 |
 | `MONOIZE_UPSTREAM_PROXY_URL` | 未設定 | 上游呼叫的對外 HTTP(S) 代理；Channel 可用 `proxy_url` 個別覆寫 |
 

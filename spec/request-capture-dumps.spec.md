@@ -10,6 +10,11 @@
 
 RCD-C1. System settings MUST include `monoize_request_capture_enabled: boolean`.
 
+RCD-C1a. For each request-scoped disk-backed JSON string in an attempt dump, persist
+an object with `truncated: true` and `omitted_bytes` equal to its UTF-8 byte length.
+Count those bytes in session truncation metadata. For an SSE frame with a
+disk-backed string, count the encoded frame in omitted frames and omitted bytes.
+
 RCD-C2. The default value of `monoize_request_capture_enabled` MUST be `false`.
 
 RCD-C3. System settings MUST include `monoize_request_capture_max_total_bytes: integer` (the global capture size budget, section 4.3).

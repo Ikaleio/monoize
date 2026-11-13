@@ -230,7 +230,7 @@ Runtime bootstrap uses environment variables. The database stores Providers, Cha
 | `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP listen address |
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite or PostgreSQL DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus metrics path |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | Forwarding request-body limit |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP request-body limit in bytes. Responses, Chat Completions, Messages, and Images POST routes default to `10737418240`. |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | Trusted reverse-proxy networks; an explicitly empty value disables trust |
 | `MONOIZE_UPSTREAM_PROXY_URL` | unset | Node-local outbound HTTP(S) proxy; Channels may override via `proxy_url` |
 | `MONOIZE_CAP_API_ENDPOINT` | unset | External Cap site endpoint; unset uses the built-in Cap service |

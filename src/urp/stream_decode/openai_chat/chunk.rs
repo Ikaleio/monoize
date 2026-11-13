@@ -20,13 +20,13 @@ static NULL_DELTA: Value = Value::Null;
 impl ChatStreamState<'_> {
     pub(super) async fn on_sse_event(
         &mut self,
-        event: eventsource_stream::Event,
+        event: crate::payload::sse::Frame,
     ) -> AppResult<Flow> {
         let ttfb_ms = self
             .started_at
             .take()
             .map(|started_at| started_at.elapsed().as_millis() as u64);
-        if event.data.trim() == "[DONE]" {
+        if event.data.is_done() {
             record_stream_chunk_metrics(
                 &self.runtime_metrics,
                 StreamChunkMetrics {
@@ -49,9 +49,9 @@ impl ChatStreamState<'_> {
             }
             return Ok(Flow::Done);
         }
-        let chunk: Value = match serde_json::from_str(&event.data) {
+        let chunk: Value = match event.data.into_json() {
             Ok(chunk) => chunk,
-            Err(error) => {
+            Err((error, raw_data)) => {
                 record_stream_chunk_metrics(
                     &self.runtime_metrics,
                     StreamChunkMetrics {
@@ -64,7 +64,7 @@ impl ChatStreamState<'_> {
                     "invalid_upstream_sse_json",
                     &format!("invalid Chat Completions SSE JSON: {error}"),
                     None,
-                    Some(Value::String(event.data)),
+                    Some(Value::String(raw_data)),
                 )
                 .await?;
                 return Ok(Flow::Stop);

@@ -16,6 +16,7 @@ mod wire;
 use crate::error::AppResult;
 use crate::error_sanitize::maybe_mask_sensitive_text;
 use crate::handlers::routing::now_ts;
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::citations::parse_chat_annotations_control;
 use crate::urp::encode::openai_chat::{
     chat_completion_id, encode_chat_usage, finish_reason_to_chat, validate_response_nodes,
@@ -28,7 +29,6 @@ use crate::urp::{
     ProviderProtocol, ResponseOutcome, TerminalNode, UrpResponse, UrpStreamEvent, Usage,
     is_internal_key,
 };
-use axum::response::sse::Event;
 use nodes::NodeState;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;

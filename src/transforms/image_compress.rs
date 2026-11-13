@@ -669,12 +669,28 @@ async fn compress_base64_image(
         .saturating_add(2)
         .saturating_div(3)
         .saturating_mul(4);
-    if base64_data.len() > max_base64_bytes {
+    if crate::payload::text_len(base64_data) > max_base64_bytes {
         return Ok(None);
     }
-    let original = match STANDARD.decode(base64_data.as_bytes()) {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
+    let original = if crate::payload::has_large_text(base64_data) {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        let Ok(reader) = crate::urp::media::base64_reader(base64_data) else {
+            return Ok(None);
+        };
+        if reader
+            .take(limits.max_encoded_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            return Ok(None);
+        }
+        bytes
+    } else {
+        match STANDARD.decode(base64_data) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(None),
+        }
     };
     if original.len() > limits.max_encoded_bytes {
         return Ok(None);

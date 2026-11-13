@@ -81,6 +81,15 @@ function transform(ctx) {
 `Monoize.fetch(url, options)` は HTTP リクエストを実行し、`{ status, headers, body }` を返します。
 `console.log`、`console.info`、`console.warn`、`console.error` はサーバーログに書き込みます。
 
+## 大きなペイロード
+
+`ctx.data` 内の 64 KiB を超える文字列は、ハンドルとして渡されることがあります。インライン Base64 とデータ URL も対象です。
+ハンドルかどうかは `Monoize.isLargeText(value)` で確認します。UTF-8 のバイト長は `value.byteLength` で取得します。
+`Monoize.readText(value, offset, length)` は最大 64 KiB の `Uint8Array` を返します。
+オフセットは 0 バイト目から数えます。文字列の末尾で読み取りが止まります。
+`ctx.data` や返却するペイロードで、ハンドルを保持、移動、削除、置換できます。
+Monoize は保持されたハンドルを元の文字列に戻します。ハンドルは呼び出し終了時に失効します。`ctx.state` には保存できません。
+
 ## サンドボックスの制限
 
 サンドボックスにはファイルシステム、プロセス、タイマー、モジュール API がありません。

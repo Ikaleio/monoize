@@ -6,9 +6,9 @@ pub mod openai_responses;
 
 use crate::error::AppResult;
 use crate::handlers::DownstreamProtocol;
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::tool_signature::SignatureProjection;
 use crate::urp::{UrpResponse, UrpStreamEvent, stream_events};
-use axum::response::sse::Event;
 use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::mpsc;

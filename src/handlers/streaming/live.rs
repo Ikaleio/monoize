@@ -98,6 +98,12 @@ impl StreamRequest {
         upstream_body: &mut Option<Value>,
         extra_headers: &[(String, String)],
     ) -> Result<Option<StreamUpstreamSource>, String> {
+        if upstream_body
+            .as_ref()
+            .is_some_and(crate::payload::contains_large)
+        {
+            return Ok(None);
+        }
         let Some(turn) = self.ws_turn.as_ref().filter(|_| {
             attempt.provider_type == ProviderType::Responses
                 && attempt.websocket_supported != Some(false)
@@ -468,7 +474,7 @@ impl StreamDecoder {
         tokio::task::JoinHandle<AppResult<()>>,
     ) {
         let (decoded_tx, decoded_rx) = mpsc::channel::<urp::UrpStreamEvent>(64);
-        let handle = tokio::spawn(async move {
+        let handle = crate::payload::spawn(async move {
             let Self {
                 legacy,
                 pending_request_envelope_extra,

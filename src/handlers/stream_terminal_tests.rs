@@ -1,5 +1,4 @@
 use super::*;
-use axum::response::IntoResponse;
 
 const TARGETS: [DownstreamProtocol; 3] = [
     DownstreamProtocol::Responses,
@@ -22,9 +21,7 @@ async fn collect_wire(mut rx: mpsc::Receiver<Event>) -> String {
     while let Some(event) = rx.recv().await {
         frames.push(Ok::<_, std::convert::Infallible>(event));
     }
-    let body = axum::response::Sse::new(futures_util::stream::iter(frames))
-        .into_response()
-        .into_body();
+    let body = crate::payload::sse::response(futures_util::stream::iter(frames), b"").into_body();
     String::from_utf8(
         axum::body::to_bytes(body, usize::MAX)
             .await

@@ -145,7 +145,7 @@ pub(super) fn replay_then_forward(
     mut decoded_rx: mpsc::Receiver<crate::urp::UrpStreamEvent>,
 ) -> mpsc::Receiver<crate::urp::UrpStreamEvent> {
     let (tx, rx) = mpsc::channel(64);
-    tokio::spawn(async move {
+    crate::payload::spawn(async move {
         for event in buffered {
             if tx.send(event).await.is_err() {
                 return;

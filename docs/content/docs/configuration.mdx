@@ -15,7 +15,9 @@ Environment variables control process bootstrap only. Providers, Channels, model
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite or PostgreSQL DSN |
 | `DATABASE_URL` | unset | Fallback DSN when `MONOIZE_DATABASE_DSN` is unset |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus metrics path |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | Forwarding request-body limit in bytes |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP request-body limit in bytes. Responses, Chat Completions, Messages, and Images POST routes default to `10737418240`. |
+| `MONOIZE_PAYLOAD_SPOOL_DIR` | System temp directory | Directory for large payload files |
+| `MONOIZE_PAYLOAD_SPOOL_MAX_BYTES` | `68719476736` | Process-wide temporary payload quota in bytes |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | Trusted reverse-proxy networks; an explicitly empty value disables trust |
 | `MONOIZE_UPSTREAM_PROXY_URL` | unset | Outbound HTTP(S) proxy for upstream calls; a Channel can override it with `proxy_url` |
 

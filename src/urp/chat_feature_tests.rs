@@ -1,7 +1,7 @@
 use super::stream_encode::{self, StreamEncodeOptions, openai_chat::ChatStreamEncoder};
 use super::{Node, TerminalNode, UrpResponse, UrpStreamEvent};
 use super::{decode::openai_chat as decode, encode::openai_chat as encode};
-use axum::response::{IntoResponse, Sse, sse::Event};
+use crate::payload::sse::WireEvent as Event;
 use serde_json::{Value, json};
 use std::{collections::HashSet, convert::Infallible, time::Instant};
 use tokio::sync::mpsc;
@@ -56,7 +56,7 @@ async fn wire_values(mut rx: mpsc::Receiver<Event>) -> Vec<Value> {
     while let Some(event) = rx.recv().await {
         events.push(Ok::<_, Infallible>(event));
     }
-    let response = Sse::new(futures_util::stream::iter(events)).into_response();
+    let response = crate::payload::sse::response(futures_util::stream::iter(events), b"");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();

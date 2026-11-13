@@ -32,7 +32,6 @@ use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tower_http::cors::CorsLayer;
-use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{
     MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };

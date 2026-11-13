@@ -1,6 +1,7 @@
 //! Named Messages SSE emission: every frame's SSE event name is its payload `type` (DM7).
 
 use crate::error::{AppError, AppResult};
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::encode::anthropic::messages_media_error_body;
 use crate::urp::encode::sanitize_provider_item_wire_body;
 use crate::urp::stream_helpers::{
@@ -9,7 +10,6 @@ use crate::urp::stream_helpers::{
 };
 use crate::urp::{Citation, ProviderProtocol};
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 

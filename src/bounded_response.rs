@@ -55,7 +55,7 @@ pub(crate) async fn read_upstream_discovery_body(
     read_response_body_with_limit(response, upstream_discovery_max_bytes()).await
 }
 
-async fn read_response_body_with_limit(
+pub(crate) async fn read_response_body_with_limit(
     response: reqwest::Response,
     max_bytes: usize,
 ) -> Result<Bytes, BoundedResponseError> {

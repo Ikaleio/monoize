@@ -1,7 +1,7 @@
 use super::*;
 use crate::handlers::DownstreamProtocol;
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::stream_encode::StreamEncodeOptions;
-use axum::response::{IntoResponse, Sse, sse::Event};
 use serde_json::json;
 use std::convert::Infallible;
 use std::time::Instant;
@@ -96,9 +96,11 @@ fn protocols() -> [ProviderProtocol; 3] {
 
 async fn collect_wire(rx: mpsc::Receiver<Event>) -> String {
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let body = Sse::new(futures_util::StreamExt::map(stream, Ok::<_, Infallible>))
-        .into_response()
-        .into_body();
+    let body = crate::payload::sse::response(
+        futures_util::StreamExt::map(stream, Ok::<_, Infallible>),
+        b"",
+    )
+    .into_body();
     String::from_utf8(
         axum::body::to_bytes(body, usize::MAX)
             .await

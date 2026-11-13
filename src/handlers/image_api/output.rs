@@ -210,7 +210,7 @@ pub(super) fn assemble_image_response(resp: urp::UrpResponse) -> AppResult<Respo
             .insert("usage".to_string(), aggregated_usage_value(&total));
     }
 
-    Ok(Json(response).into_response())
+    Ok(crate::payload::json_response(response))
 }
 
 #[derive(Default)]

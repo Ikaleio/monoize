@@ -15,7 +15,9 @@ description: Monoize プロセスの環境変数。
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite または PostgreSQL の DSN |
 | `DATABASE_URL` | 未設定 | `MONOIZE_DATABASE_DSN` が未設定の場合の代替 DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus メトリクスのパス |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | 転送リクエストボディの上限（バイト） |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP リクエストボディの上限（バイト）。Responses、Chat Completions、Messages、Images の POST ルートの既定値は `10737418240`。 |
+| `MONOIZE_PAYLOAD_SPOOL_DIR` | OS の一時ディレクトリ | 大きなペイロードの一時ファイル用ディレクトリ |
+| `MONOIZE_PAYLOAD_SPOOL_MAX_BYTES` | `68719476736` | プロセス全体の一時ペイロード容量上限（バイト） |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 信頼するリバースプロキシのネットワーク。明示的に空にすると信頼を無効化 |
 | `MONOIZE_UPSTREAM_PROXY_URL` | 未設定 | 上流呼び出し用の送信 HTTP(S) プロキシ。Channel の `proxy_url` で個別に上書き可能 |
 

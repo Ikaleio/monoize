@@ -81,6 +81,15 @@ function transform(ctx) {
 `Monoize.fetch(url, options)` 發起 HTTP 請求並回傳 `{ status, headers, body }`。
 `console.log`、`console.info`、`console.warn` 和 `console.error` 寫入伺服器日誌。
 
+## 大型負載
+
+`ctx.data` 中超過 64 KiB 的字串可能以控制代碼呈現，包括內嵌 Base64 與資料 URL。
+用 `Monoize.isLargeText(value)` 辨識控制代碼。用 `value.byteLength` 取得 UTF-8 位元組數。
+`Monoize.readText(value, offset, length)` 傳回最多 64 KiB 的 `Uint8Array`。
+位移從第 0 個位元組起算。讀取到字串結尾時停止。
+可在 `ctx.data` 或傳回的負載中保留、移動、刪除或替換控制代碼。
+Monoize 會還原保留的控制代碼所代表的原始文字。控制代碼在這次呼叫結束後失效，不可放入 `ctx.state`。
+
 ## 沙箱限制
 
 沙箱沒有檔案系統、行程、計時器和模組 API。

@@ -125,25 +125,25 @@ impl<'a> AnthropicMessagesStreamState<'a> {
         Flow::Stop
     }
 
-    pub(super) async fn on_sse_event(&mut self, event: eventsource_stream::Event) -> Flow {
+    pub(super) async fn on_sse_event(&mut self, event: crate::payload::sse::Frame) -> Flow {
         if self.tx.is_closed() {
             self.downstream_closed = true;
         }
         mark_stream_ttfb_if_needed(&mut self.started_at, &self.runtime_metrics).await;
-        if event.data.trim() == "[DONE]" {
+        if event.data.is_done() {
             record_stream_done_sentinel(&self.runtime_metrics).await;
             return Flow::Terminal("[DONE]");
         }
-        let data: Value = match serde_json::from_str(&event.data) {
+        let data: Value = match event.data.into_json() {
             Ok(data) => data,
-            Err(error) => {
+            Err((error, raw_data)) => {
                 return self
                     .protocol_error(
                         "messages_invalid_sse_json",
                         format!("invalid JSON in upstream Messages event: {error}"),
                         HashMap::from([
                             ("event_name".to_string(), Value::String(event.event)),
-                            ("raw_data".to_string(), Value::String(event.data)),
+                            ("raw_data".to_string(), Value::String(raw_data)),
                         ]),
                     )
                     .await;

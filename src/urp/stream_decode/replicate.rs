@@ -1,15 +1,13 @@
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, record_stream_done_sentinel, record_stream_terminal_event,
     record_visible_output_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::payload::sse::Frames;
 use crate::urp::{
     FinishReason, Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode, UrpStreamEvent,
 };
-use axum::http::StatusCode;
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
@@ -26,35 +24,20 @@ pub(crate) async fn stream_replicate_to_urp_events(
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let mut decoder = ReplicateStreamDecoder::new(tx, urp.model.clone());
-    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut stream = upstream_resp.bytes_stream().eventsource();
+    let mut stream = Frames::new(upstream_resp, idle_timeout_ms, true);
 
-    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let ev = ev.map_err(|err| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_stream_decode_failed",
-                crate::error::sse_error_chain(&err),
-            )
-        })?;
-
+    while let Some(ev) = stream.next().await.map_err(|error| error.into_app())? {
         mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
 
+        let crate::payload::sse::FrameData::Text(data) = ev.data else {
+            unreachable!()
+        };
         match ev.event.as_str() {
             "output" => {
-                record_visible_output_delta(&runtime_metrics, &ev.data).await;
-                decoder.on_output(ev.data).await;
+                record_visible_output_delta(&runtime_metrics, &data).await;
+                decoder.on_output(data).await;
             }
-            "error" => decoder.on_error(ev.data).await,
+            "error" => decoder.on_error(data).await,
             "done" => {
                 record_stream_done_sentinel(&runtime_metrics).await;
                 decoder.on_done();

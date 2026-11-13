@@ -1,12 +1,12 @@
 //! Numbered Responses SSE emission (STR1, STR2, STR3a).
 
 use crate::error::{AppError, AppResult};
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::TokenLogprob;
 use crate::urp::stream_helpers::{
     send_named_sse_json, send_responses_delta_string, send_responses_event,
 };
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::sync::mpsc;

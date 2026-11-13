@@ -82,7 +82,7 @@ impl StreamForward {
             terminal_output,
             reconstructed,
         };
-        tokio::spawn(forwarding.run(tx));
+        crate::payload::spawn(forwarding.run(tx));
         receiver_event_stream(rx)
     }
 }
@@ -209,7 +209,8 @@ impl LiveStages {
         let (encode_input_rx, history_handle) = match history {
             Some(history) => {
                 let (history_tx, history_rx) = mpsc::channel(64);
-                let handle = tokio::spawn(history.forward_stream(encode_input_rx, history_tx));
+                let handle =
+                    crate::payload::spawn(history.forward_stream(encode_input_rx, history_tx));
                 (history_rx, Some(handle))
             }
             None => (encode_input_rx, None),

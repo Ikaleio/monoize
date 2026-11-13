@@ -17,10 +17,9 @@ mod terminal;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::payload::sse::{FrameData, Frames};
 use crate::urp::UrpStreamEvent;
 use axum::http::StatusCode;
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use serde_json::Value;
 use state::{Flow, ResponsesStreamDecoder};
 use std::collections::HashMap;
@@ -37,20 +36,31 @@ pub(crate) async fn stream_responses_to_urp_events(
     runtime_metrics: Option<Arc<Mutex<StreamRuntimeMetrics>>>,
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
-    let (frame_tx, frame_rx) = mpsc::channel(32);
-    let feeder = tokio::spawn(feed_sse_frames(upstream_resp, frame_tx));
-    let result = stream_responses_frames_to_urp_events(
+    let mut frames = Frames::new(upstream_resp, idle_timeout_ms, false);
+    let mut decoder = ResponsesStreamDecoder::new(
         urp,
         pending_request_envelope_extra,
-        frame_rx,
         tx,
         started_at,
         runtime_metrics,
-        idle_timeout_ms,
-    )
-    .await;
-    feeder.abort();
-    result
+    );
+    loop {
+        let frame = match frames.next().await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(error) => {
+                decoder.release_held(None, None).await;
+                return Err(error.into_app());
+            }
+        };
+        match decoder.on_frame(frame.event, frame.data).await {
+            Flow::Continue => {}
+            Flow::End => break,
+            Flow::Stop => return Ok(()),
+        }
+    }
+    decoder.finish().await;
+    Ok(())
 }
 
 /// Decodes Responses JSON frames supplied by an upstream WebSocket feeder
@@ -89,7 +99,7 @@ pub(crate) async fn stream_responses_frames_to_urp_events(
                 ));
             }
         };
-        match decoder.on_frame(event_name, data).await {
+        match decoder.on_frame(event_name, FrameData::from(data)).await {
             Flow::Continue => {}
             Flow::End => break,
             Flow::Stop => return Ok(()),
@@ -97,26 +107,4 @@ pub(crate) async fn stream_responses_frames_to_urp_events(
     }
     decoder.finish().await;
     Ok(())
-}
-
-async fn feed_sse_frames(
-    upstream_resp: reqwest::Response,
-    frame_tx: mpsc::Sender<AppResult<(String, String)>>,
-) {
-    let mut stream = upstream_resp.bytes_stream().eventsource();
-    while let Some(event) = stream.next().await {
-        let frame = event
-            .map(|event| (event.event, event.data))
-            .map_err(|error| {
-                AppError::new(
-                    StatusCode::BAD_GATEWAY,
-                    "upstream_stream_decode_failed",
-                    crate::error::sse_error_chain(&error),
-                )
-            });
-        let failed = frame.is_err();
-        if frame_tx.send(frame).await.is_err() || failed {
-            break;
-        }
-    }
 }

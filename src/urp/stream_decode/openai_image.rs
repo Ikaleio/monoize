@@ -3,13 +3,12 @@ use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, record_stream_done_sentinel, record_stream_terminal_event,
 };
 use crate::handlers::{StreamRuntimeMetrics, UrpRequest as HandlerUrpRequest};
+use crate::payload::sse::Frames;
 use crate::urp::{
     FinishReason, ImageSource, Node, NodeDelta, NodeHeader, OrdinaryRole, TerminalNode,
     UrpStreamEvent, Usage, is_internal_key,
 };
 use axum::http::StatusCode;
-use eventsource_stream::Eventsource;
-use futures_util::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,48 +23,41 @@ pub(crate) async fn stream_image_to_urp_events(
     idle_timeout_ms: u64,
 ) -> AppResult<()> {
     let mut decoder = ImageStreamDecoder::new(tx, urp.model.clone());
-    let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut stream = upstream_resp.bytes_stream().eventsource();
+    let mut stream = Frames::new(upstream_resp, idle_timeout_ms, false);
 
-    while let Some(ev) = tokio::time::timeout(idle_timeout, stream.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream stream idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let ev = ev.map_err(|err| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "upstream_stream_decode_failed",
-                crate::error::sse_error_chain(&err),
-            )
-        })?;
+    while let Some(ev) = stream.next().await.map_err(|error| error.into_app())? {
         mark_stream_ttfb_if_needed(&mut started_at, &runtime_metrics).await;
-        if ev.data.trim() == "[DONE]" {
+        if ev.data.is_done() {
             record_stream_done_sentinel(&runtime_metrics).await;
             break;
         }
-
-        let event_name = resolve_event_name(&ev.event, &ev.data);
-        match event_name.as_str() {
+        let data = ev.data.into_json().map_err(|(error, _)| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_stream_decode_failed",
+                error,
+            )
+        })?;
+        let event_name = if ev.event.is_empty() || ev.event == "message" {
+            data.get("type")
+                .and_then(Value::as_str)
+                .unwrap_or(&ev.event)
+        } else {
+            &ev.event
+        };
+        match event_name {
             "image_generation.partial_image"
             | "image_edit.partial_image"
             | "response.image_generation.partial_image" => {
-                decoder
-                    .on_partial_image(&event_name, &parse_payload(&ev.data)?)
-                    .await?;
+                decoder.on_partial_image(event_name, &data).await?;
             }
             "image_generation.completed"
             | "image_edit.completed"
             | "response.image_generation.completed" => {
-                decoder.on_completed(&parse_payload(&ev.data)?).await?;
+                decoder.on_completed(&data).await?;
             }
             "error" => {
-                decoder.on_error(ev.data).await?;
+                decoder.on_error(&data).await?;
                 return Ok(());
             }
             _ => {}
@@ -186,9 +178,8 @@ impl ImageStreamDecoder {
         Ok(())
     }
 
-    async fn on_error(&self, data: String) -> AppResult<()> {
-        let value = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
-        let error = value.get("error").unwrap_or(&value);
+    async fn on_error(&self, value: &Value) -> AppResult<()> {
+        let error = value.get("error").unwrap_or(value);
         let code = error
             .get("code")
             .and_then(Value::as_str)
@@ -198,7 +189,7 @@ impl ImageStreamDecoder {
             .get("message")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .unwrap_or(data);
+            .unwrap_or_else(|| "upstream image error".to_owned());
         self.send(UrpStreamEvent::Error {
             code: Some(code),
             message,
@@ -235,39 +226,12 @@ impl ImageStreamDecoder {
     }
 }
 
-fn parse_payload(data: &str) -> AppResult<Value> {
-    serde_json::from_str(data).map_err(|err| {
-        AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "upstream_stream_decode_failed",
-            err.to_string(),
-        )
-    })
-}
-
 fn send_failed(err: mpsc::error::SendError<UrpStreamEvent>) -> AppError {
     AppError::new(
         StatusCode::BAD_GATEWAY,
         "stream_send_failed",
         err.to_string(),
     )
-}
-
-/// OIU-S1a: the SSE `event` field wins; frames without an explicit event name
-/// (eventsource default `message`) fall back to the JSON `type` field.
-fn resolve_event_name(sse_event: &str, data: &str) -> String {
-    if !sse_event.is_empty() && sse_event != "message" {
-        return sse_event.to_string();
-    }
-    serde_json::from_str::<Value>(data)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("type")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| sse_event.to_string())
 }
 
 fn image_source_from_payload(payload: &Value) -> Option<ImageSource> {

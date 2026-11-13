@@ -81,6 +81,15 @@ function transform(ctx) {
 `Monoize.fetch(url, options)` performs an HTTP request and returns `{ status, headers, body }`.
 `console.log`, `console.info`, `console.warn`, and `console.error` write to the server log.
 
+## Large payloads
+
+Strings larger than 64 KiB can appear as opaque handles in `ctx.data`. This includes inline Base64 and data URLs.
+Use `Monoize.isLargeText(value)` to recognize a handle. Use `value.byteLength` to get the UTF-8 byte length.
+`Monoize.readText(value, offset, length)` returns a `Uint8Array` of up to 64 KiB.
+Offsets are zero-based byte offsets. Reads stop at the end of the value.
+Keep, move, remove, or replace the handle in `ctx.data` or in a returned payload.
+Monoize writes the original text for each retained handle. Handles expire after the invocation and cannot go in `ctx.state`.
+
 ## Sandbox limits
 
 The sandbox has no filesystem, process, timer, or module APIs.

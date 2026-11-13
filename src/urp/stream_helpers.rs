@@ -1,6 +1,6 @@
 use crate::error::{AppError, AppResult};
+use crate::payload::sse::WireEvent as Event;
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
@@ -19,10 +19,11 @@ async fn send_sse_event(tx: &mpsc::Sender<Event>, event: Event) {
 }
 
 pub(crate) async fn send_plain_sse_data(tx: &mpsc::Sender<Event>, data: &str) -> AppResult<()> {
+    let event = Event::plain(data);
     if let Some(capture) = crate::request_capture::current_sse_capture() {
         capture.record(format!("data: {data}\n\n")).await;
     }
-    send_sse_event(tx, Event::default().data(data)).await;
+    send_sse_event(tx, event).await;
     Ok(())
 }
 
@@ -39,29 +40,36 @@ async fn send_sse_json(
     if capture.is_none() && tx.is_closed() {
         return Ok(());
     }
-    let event = match name {
-        Some(name) => Event::default().event(name),
-        None => Event::default(),
+    let encoded = if crate::payload::contains_large(data) {
+        let data = data.clone();
+        let name = name.map(str::to_owned);
+        let payload = crate::payload::current().expect("large text has an owning payload");
+        tokio::task::spawn_blocking(move || {
+            Event::json_with_payload(name.as_deref(), &data, Some(&payload))
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|result| result)
+    } else {
+        Event::json_with_payload(name, data, None)
     };
-    let event = match capture {
-        Some(capture) => {
-            let data = data.to_string();
-            let frame = match name {
-                Some(name) => format!("event: {name}\ndata: {data}\n\n"),
-                None => format!("data: {data}\n\n"),
-            };
-            capture.record(frame).await;
-            event.data(data)
+    let event = encoded.map_err(|error| {
+        AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "stream_encode_failed",
+            error.to_string(),
+        )
+    })?;
+    if let Some(capture) = capture {
+        match &event {
+            Event::Bytes(bytes) => {
+                capture
+                    .record(String::from_utf8_lossy(bytes).into_owned())
+                    .await
+            }
+            Event::File(spool) => capture.omit_frame(spool.len() as usize).await,
         }
-        // Serializes straight into the event buffer; byte-identical to `data(to_string())`.
-        None => event.json_data(data).map_err(|err| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "stream_encode_failed",
-                err.to_string(),
-            )
-        })?,
-    };
+    }
     send_sse_event(tx, event).await;
     Ok(())
 }
@@ -167,7 +175,9 @@ pub(crate) fn split_json_value_by_string_patch(
         template,
         content,
         max_frame_length,
-        |value, _chunk_index| sse_data_line_length(&value.to_string()),
+        |value, _chunk_index| {
+            crate::upstream::serialized_json_len(value).saturating_add("data: ".len())
+        },
         patch,
     )
 }
@@ -179,7 +189,8 @@ pub(crate) fn split_json_by_exact_limit(
     data_line_len: impl Fn(&Value, usize) -> usize,
     patch: impl Fn(&mut Value, &str),
 ) -> Vec<Value> {
-    let Some(max_len) = max_frame_length else {
+    let Some(max_len) = max_frame_length.filter(|_| !crate::payload::has_large_text(content))
+    else {
         let mut value = template;
         patch(&mut value, content);
         return vec![value];

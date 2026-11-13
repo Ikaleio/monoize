@@ -91,7 +91,7 @@ async fn start_image_pipeline(
         mask_sensitive_info,
         idle_timeout_ms,
     };
-    let decode = tokio::spawn(async move { decoder.run(decoded_tx).await });
+    let decode = crate::payload::spawn(async move { decoder.run(decoded_tx).await });
     // RCD-D10c: capture the terminal event before response transforms.
     let reconstruction_slot = execution
         .context
@@ -102,7 +102,7 @@ async fn start_image_pipeline(
     let (transform_input_rx, reconstruct) = match reconstruction_slot.clone() {
         Some(slot) => {
             let (tap_tx, tap_rx) = mpsc::channel::<urp::UrpStreamEvent>(64);
-            let handle = tokio::spawn(async move {
+            let handle = crate::payload::spawn(async move {
                 retain_reconstructed_urp_response(decoded_rx, tap_tx, slot).await
             });
             (tap_rx, Some(handle))
@@ -115,7 +115,7 @@ async fn start_image_pipeline(
     let state = execution.context.state.clone();
     let model = execution.logical_model.clone();
     let provider_type = attempt.provider_type;
-    let transform = tokio::spawn(async move {
+    let transform = crate::payload::spawn(async move {
         transform_urp_stream(
             &state,
             transform_input_rx,
@@ -191,7 +191,7 @@ impl ImageStreamPipeline {
     ) -> AppResult<ImageCollection> {
         let mut collected = ImageCollectedEvents::default();
         while let Some(event) = self.events.recv().await {
-            collected.accept(event, model, sink).await;
+            collected.accept(event, model, sink).await?;
         }
         let (decode_join, transform_join) = tokio::join!(self.decode, self.transform);
         let decode_result =
@@ -220,7 +220,7 @@ impl ImageCollectedEvents {
         event: urp::UrpStreamEvent,
         model: &str,
         sink: &mut Option<&mut ImageStreamSink>,
-    ) {
+    ) -> AppResult<()> {
         match event {
             urp::UrpStreamEvent::NodeDelta {
                 delta: urp::NodeDelta::Image { source },
@@ -228,7 +228,7 @@ impl ImageCollectedEvents {
                 ..
             } => {
                 if let Some(sink) = sink.as_deref_mut() {
-                    sink.send_partial(&source, &extra_body).await;
+                    sink.send_partial(&source, &extra_body).await?;
                 }
             }
             urp::UrpStreamEvent::ResponseDone {
@@ -272,6 +272,7 @@ impl ImageCollectedEvents {
             }
             _ => {}
         }
+        Ok(())
     }
 
     fn finish(
@@ -319,23 +320,29 @@ async fn decode_image_json_as_stream(
     // CFG-6a item 3: the dispatch sets no total body deadline, so each chunk
     // wait is bounded by the stream idle timeout instead.
     let idle_timeout = std::time::Duration::from_millis(idle_timeout_ms.max(1));
-    let mut body = Vec::new();
     let mut chunks = upstream_response.bytes_stream();
-    while let Some(chunk) = tokio::time::timeout(idle_timeout, chunks.next())
-        .await
-        .map_err(|_| {
-            AppError::new(
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream_idle_timeout",
-                format!("upstream image body idle for {idle_timeout_ms}ms without data"),
-            )
-        })?
-    {
-        let chunk = chunk.map_err(|error| invalid_json(crate::error::error_chain(&error)))?;
-        body.extend_from_slice(&chunk);
-    }
-    let value: Value =
-        serde_json::from_slice(&body).map_err(|error| invalid_json(error.to_string()))?;
+    let stream = futures_util::stream::unfold(&mut chunks, |chunks| async move {
+        match tokio::time::timeout(idle_timeout, chunks.next()).await {
+            Ok(Some(chunk)) => Some((
+                chunk.map_err(|error| crate::payload::ReadError::Transport(error.to_string())),
+                chunks,
+            )),
+            Ok(None) => None,
+            Err(_) => Some((
+                Err(crate::payload::ReadError::Transport(format!(
+                    "upstream image body idle for {idle_timeout_ms}ms without data"
+                ))),
+                chunks,
+            )),
+        }
+    });
+    let value = crate::payload::read_json(
+        stream,
+        crate::payload::current().unwrap_or_default(),
+        crate::payload::WIRE_LIMIT,
+    )
+    .await
+    .map_err(|error| invalid_json(error.to_string()))?;
     let response = decode_response_from_provider(
         provider_type,
         &value,

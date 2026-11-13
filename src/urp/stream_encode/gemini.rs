@@ -9,13 +9,13 @@ mod wire;
 
 use super::{StreamEncodeOptions, StreamEncoder};
 use crate::error::{AppError, AppResult};
+use crate::payload::sse::WireEvent as Event;
 use crate::urp::encode::gemini::encode_response_checked;
 use crate::urp::media::error_body;
 use crate::urp::stream_helpers::send_plain_sse_json;
 use crate::urp::tool_signature::SignatureProjection;
 use crate::urp::{UrpResponse, UrpStreamEvent, is_internal_key};
 use axum::http::StatusCode;
-use axum::response::sse::Event;
 use nodes::NodeSlot;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
