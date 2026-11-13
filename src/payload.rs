@@ -154,6 +154,7 @@ impl Write for SpoolWriter {
 impl Write for OpenSpool {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let requested = buf.len() as u64;
+        #[allow(deprecated, reason = "Keep compatibility with Rust 1.88")]
         SPOOL_BYTES
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(requested)

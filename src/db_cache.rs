@@ -1506,6 +1506,7 @@ impl RequestLogBatcher {
 }
 
 fn atomic_saturating_sub(counter: &AtomicU64, amount: u64) {
+    #[allow(deprecated, reason = "Keep compatibility with Rust 1.88")]
     let _ = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
         Some(current.saturating_sub(amount))
     });
