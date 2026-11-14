@@ -223,12 +223,16 @@ impl StreamForward {
         );
         // Wrap newly produced encrypted reasoning payloads in mz2 envelopes
         // BEFORE response-phase transforms can alter their payload (PIPE-1d).
-        if self.request.auth.reasoning_envelope_enabled {
-            urp::wrap_reasoning_envelopes_in_response(
+        if self.request.auth.reasoning_envelope_enabled
+            && let Err(error) = urp::wrap_reasoning_envelopes_in_response(
                 &mut resp,
                 reasoning_envelope_provider_type(attempt.provider_type),
                 &req.model,
-            );
+            )
+        {
+            return Err(self
+                .fail_buffered_reply(attempt, reasoning_envelope_io_error(error))
+                .await);
         }
         for rules in [
             &attempt.provider_transforms,

@@ -95,7 +95,8 @@ fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
         );
     }
 
-    crate::urp::tool_signature::restore_request_call_signatures(&mut input);
+    crate::urp::tool_signature::restore_request_call_signatures(&mut input)
+        .map_err(|error| error.to_string())?;
     crate::urp::logprobs::strip_request_extras(&mut extra_body);
     crate::urp::sampling::strip_request_extras(&mut extra_body, ProviderProtocol::ChatCompletion);
     Ok(UrpRequest {

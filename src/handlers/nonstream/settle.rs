@@ -51,17 +51,21 @@ impl NonstreamRun<'_> {
             .map(|target| urp::strip_foreign_response(resp, target));
         // Wrap newly produced encrypted reasoning payloads in mz2 envelopes
         // BEFORE any response-phase transform observes the response. Per
-        // spec/urp-transform-system.spec.md PIPE-1 step 12 and PIPE-1d,
+        // spec/urp-transform-system.spec.md PIPE-1 step 13 and PIPE-1d,
         // transforms must only see encrypted reasoning in `mz2.` envelope
         // form so that bulk-mutation transforms (e.g.
         // reasoning_strip_encrypted) can reason about that single canonical
         // surface.
-        if auth.reasoning_envelope_enabled {
-            urp::wrap_reasoning_envelopes_in_response(
+        if auth.reasoning_envelope_enabled
+            && let Err(error) = urp::wrap_reasoning_envelopes_in_response(
                 resp,
                 reasoning_envelope_provider_type(attempt.provider_type),
                 &call.req.model,
-            );
+            )
+        {
+            return Err(self
+                .fail_request(attempt, reasoning_envelope_io_error(error))
+                .await);
         }
         self.apply_response_rules(attempt, resp, &attempt.provider_transforms)
             .await?;

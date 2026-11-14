@@ -194,13 +194,15 @@ fn opaque_reasoning_client_replay_preserves_payload_and_provider_binding() {
                     &mut original,
                     origin.as_str(),
                     "origin-model",
-                );
+                )
+                .unwrap();
                 let once = serde_json::to_value(&original).unwrap();
                 wrap_reasoning_envelopes_in_response(
                     &mut original,
                     origin.as_str(),
                     "origin-model",
-                );
+                )
+                .unwrap();
                 assert_eq!(serde_json::to_value(&original).unwrap(), once);
                 for stream in [false, true] {
                     let mut replay =
@@ -210,7 +212,10 @@ fn opaque_reasoning_client_replay_preserves_payload_and_provider_binding() {
                     assert_eq!(before.1, "summary-only");
                     assert_eq!(before.2.len(), 1);
                     assert_eq!(
-                        parse_reasoning_envelope(&before.2[0]).unwrap().payload,
+                        parse_reasoning_envelope(&before.2[0])
+                            .unwrap()
+                            .unwrap()
+                            .payload,
                         opaque
                     );
                     let mut wrong = replay.input.clone();
@@ -219,7 +224,8 @@ fn opaque_reasoning_client_replay_preserves_payload_and_provider_binding() {
                         origin.as_str(),
                         "wrong-model",
                         true,
-                    );
+                    )
+                    .unwrap();
                     // PR4c.6: Messages replay matches on provider type only.
                     assert_eq!(
                         reasoning_values(&wrong).2.is_empty(),
@@ -231,7 +237,8 @@ fn opaque_reasoning_client_replay_preserves_payload_and_provider_binding() {
                         origin.as_str(),
                         "origin-model",
                         true,
-                    );
+                    )
+                    .unwrap();
                     assert_eq!(
                         reasoning_values(&replay.input),
                         (String::new(), "summary-only".into(), vec![opaque.clone()])
@@ -252,7 +259,8 @@ async fn opaque_reasoning_synthetic_sse_preserves_summary_and_exact_envelope() {
                 Some("visible summary"),
                 Some(opaque.clone()),
             )]);
-            wrap_reasoning_envelopes_in_response(&mut original, origin.as_str(), "origin-model");
+            wrap_reasoning_envelopes_in_response(&mut original, origin.as_str(), "origin-model")
+                .unwrap();
             let events = synthetic_decode(downstream, &original).await;
             assert!(
                 !events
@@ -274,7 +282,7 @@ async fn opaque_reasoning_synthetic_sse_preserves_summary_and_exact_envelope() {
             assert!(raw.is_empty(), "ciphertext or summary became raw: {raw}");
             assert_eq!(summary, "visible summary");
             assert_eq!(encrypted.len(), 1);
-            let envelope = parse_reasoning_envelope(&encrypted[0]).unwrap();
+            let envelope = parse_reasoning_envelope(&encrypted[0]).unwrap().unwrap();
             assert_eq!(envelope.payload, opaque);
             assert_eq!(envelope.provider_type, origin.as_str());
         }
@@ -397,9 +405,10 @@ fn malformed_envelopes_are_not_decoded_as_plaintext() {
         json!({"v":2}),
         Value::Null,
     ] {
-        assert!(parse_reasoning_envelope(&value).is_none());
+        assert!(parse_reasoning_envelope(&value).unwrap().is_none());
         let mut nodes = vec![reasoning(None, Some("summary"), Some(value.clone()))];
-        filter_and_unwrap_reasoning_envelopes_for_upstream(&mut nodes, "responses", "m", true);
+        filter_and_unwrap_reasoning_envelopes_for_upstream(&mut nodes, "responses", "m", true)
+            .unwrap();
         assert_eq!(
             reasoning_values(&nodes),
             (String::new(), "summary".into(), vec![value])
@@ -430,6 +439,7 @@ fn encrypted_fragment_accumulation_is_per_node_and_terminal_snapshot_is_atomic()
             assert!(
                 state
                     .wrap_event(encrypted_delta(index, json!(fragment)), origin, "m")
+                    .unwrap()
                     .is_empty()
             );
         }
@@ -437,16 +447,18 @@ fn encrypted_fragment_accumulation_is_per_node_and_terminal_snapshot_is_atomic()
             (0, Some(json!("replacement")), json!("replacement")),
             (1, None, json!("second-last")),
         ] {
-            let events = state.wrap_event(
-                UrpStreamEvent::NodeDone {
-                    node_index: index,
-                    node: reasoning(None, None, terminal),
-                    usage: None,
-                    extra_body: HashMap::new(),
-                },
-                origin,
-                "m",
-            );
+            let events = state
+                .wrap_event(
+                    UrpStreamEvent::NodeDone {
+                        node_index: index,
+                        node: reasoning(None, None, terminal),
+                        usage: None,
+                        extra_body: HashMap::new(),
+                    },
+                    origin,
+                    "m",
+                )
+                .unwrap();
             assert_eq!(events.len(), 2);
             let UrpStreamEvent::NodeDelta {
                 delta:
@@ -462,7 +474,10 @@ fn encrypted_fragment_accumulation_is_per_node_and_terminal_snapshot_is_atomic()
                 panic!("{events:?}")
             };
             assert!(content.is_none() && summary.is_none());
-            assert_eq!(parse_reasoning_envelope(value).unwrap().payload, expected);
+            assert_eq!(
+                parse_reasoning_envelope(value).unwrap().unwrap().payload,
+                expected
+            );
             let UrpStreamEvent::NodeDone { node, .. } = &events[1] else {
                 panic!()
             };
@@ -480,28 +495,33 @@ fn envelope_error_clears_pending_fragments_without_fabricating_output() {
     assert!(
         state
             .wrap_event(encrypted_delta(0, json!("unfinished")), "messages", "m")
+            .unwrap()
             .is_empty()
     );
-    let events = state.wrap_event(
-        UrpStreamEvent::Error {
-            code: Some("broken".into()),
-            message: "failed".into(),
-            extra_body: HashMap::new(),
-        },
-        "messages",
-        "m",
-    );
+    let events = state
+        .wrap_event(
+            UrpStreamEvent::Error {
+                code: Some("broken".into()),
+                message: "failed".into(),
+                extra_body: HashMap::new(),
+            },
+            "messages",
+            "m",
+        )
+        .unwrap();
     assert!(matches!(events.as_slice(), [UrpStreamEvent::Error { .. }]));
-    let events = state.wrap_event(
-        UrpStreamEvent::NodeDone {
-            node_index: 0,
-            node: reasoning(None, None, None),
-            usage: None,
-            extra_body: HashMap::new(),
-        },
-        "messages",
-        "m",
-    );
+    let events = state
+        .wrap_event(
+            UrpStreamEvent::NodeDone {
+                node_index: 0,
+                node: reasoning(None, None, None),
+                usage: None,
+                extra_body: HashMap::new(),
+            },
+            "messages",
+            "m",
+        )
+        .unwrap();
     assert_eq!(events.len(), 1);
     let UrpStreamEvent::NodeDone { node, .. } = &events[0] else {
         panic!()
@@ -709,21 +729,23 @@ fn envelope_missing_id_and_disabled_binding_do_not_change_raw_or_summary() {
             *id = None;
         }
         let mut canonical = response(vec![node]);
-        wrap_reasoning_envelopes_in_response(&mut canonical, protocol.as_str(), "source");
+        wrap_reasoning_envelopes_in_response(&mut canonical, protocol.as_str(), "source").unwrap();
         let mut mismatched = canonical.output.clone();
         filter_and_unwrap_reasoning_envelopes_for_upstream(
             &mut mismatched,
             "different-protocol",
             "source",
             true,
-        );
+        )
+        .unwrap();
         assert!(mismatched.is_empty());
         filter_and_unwrap_reasoning_envelopes_for_upstream(
             &mut canonical.output,
             "different-protocol",
             "different-model",
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(
             reasoning_values(&canonical.output),
             ("raw".into(), "summary".into(), vec![json!("cipher")])
@@ -840,10 +862,10 @@ async fn chat_citation_offsets_follow_unicode_output_in_buffered_and_streamed_mo
 fn empty_encrypted_payloads_do_not_become_nonempty_reasoning_envelopes() {
     for empty in [Value::Null, json!(""), json!([]), json!({})] {
         let mut canonical = response(vec![reasoning(None, None, Some(empty.clone()))]);
-        wrap_reasoning_envelopes_in_response(&mut canonical, "responses", "m");
+        wrap_reasoning_envelopes_in_response(&mut canonical, "responses", "m").unwrap();
         let (_, _, encrypted) = reasoning_values(&canonical.output);
         assert_eq!(encrypted, vec![empty]);
-        assert!(parse_reasoning_envelope(&encrypted[0]).is_none());
+        assert!(parse_reasoning_envelope(&encrypted[0]).unwrap().is_none());
         let wire = encode_response(ProviderProtocol::Responses, &canonical);
         assert_eq!(wire["output"], json!([]));
     }

@@ -246,7 +246,8 @@ fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
         }
     }
 
-    crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes);
+    crate::urp::tool_signature::restore_request_call_signatures(&mut input_nodes)
+        .map_err(|error| error.to_string())?;
     crate::urp::sampling::strip_request_extras(&mut extra_body, ProviderProtocol::Messages);
     Ok(UrpRequest {
         image_generation: None,

@@ -13,7 +13,9 @@ impl NonstreamRun<'_> {
     ) -> AppResult<(AttemptCall, Value)> {
         let auth = self.inputs.auth;
         let downstream = self.inputs.downstream;
-        shape_request_for_attempt(&mut req, attempt, auth, downstream);
+        if let Err(err) = shape_request_for_attempt(&mut req, attempt, auth, downstream) {
+            return Err(self.fail_request(attempt, err).await);
+        }
         let global_transforms = self.apply_request_transforms(attempt, &mut req).await?;
         strip_monoize_context(&mut req);
         let capture_transform_chain = if self.inputs.capture.session.is_some() {
@@ -94,7 +96,7 @@ pub(in crate::handlers) fn shape_request_for_attempt(
     attempt: &MonoizeAttempt,
     auth: &crate::auth::AuthResult,
     downstream: DownstreamProtocol,
-) {
+) -> AppResult<()> {
     if matches!(downstream, DownstreamProtocol::Responses)
         || attempt.provider_type == ProviderType::Gemini
     {
@@ -115,7 +117,7 @@ pub(in crate::handlers) fn shape_request_for_attempt(
     req.model = attempt.upstream_model.clone();
     // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
     // observes the request input. Per spec/urp-transform-system.spec.md
-    // PIPE-1 step 6 and PIPE-1d, transforms must not see encrypted
+    // PIPE-1 step 7 and PIPE-1d, transforms must not see encrypted
     // reasoning replays still in `mz2.` envelope form, and they must not
     // be allowed to mutate the reasoning payload before envelope-bound
     // provider/model checks (PR4c.6) decide whether to keep or drop the
@@ -125,5 +127,6 @@ pub(in crate::handlers) fn shape_request_for_attempt(
         reasoning_envelope_provider_type(attempt.provider_type),
         &req.model,
         auth.reasoning_envelope_enabled,
-    );
+    )
+    .map_err(reasoning_envelope_io_error)
 }

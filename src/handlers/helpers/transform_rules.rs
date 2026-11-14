@@ -174,9 +174,9 @@ pub(in crate::handlers) async fn transform_urp_stream(
         // Assemble fragments before wrapping so transforms never observe raw fragments
         // or a concatenation of independently wrapped envelopes.
         let enveloped_events = match config.reasoning_envelope {
-            Some((provider_type, upstream_model)) => {
-                reasoning_envelope_state.wrap_event(event, provider_type, upstream_model)
-            }
+            Some((provider_type, upstream_model)) => reasoning_envelope_state
+                .wrap_event(event, provider_type, upstream_model)
+                .map_err(reasoning_envelope_io_error)?,
             None => vec![event],
         };
         for event in enveloped_events {

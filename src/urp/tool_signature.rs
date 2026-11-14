@@ -34,7 +34,7 @@ fn transport_node(call_id: &str, signature: Value) -> Node {
 
 /// Moves recognized wire transport into its correlated canonical call before request transforms.
 /// An existing typed signature takes precedence. Unmatched transport has no native replay target.
-pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
+pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) -> std::io::Result<()> {
     let mut calls = HashMap::<String, Vec<usize>>::new();
     for (index, node) in nodes.iter().enumerate() {
         if let Node::ToolCall { call_id, .. } = node {
@@ -60,15 +60,15 @@ pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
         {
             continue;
         }
-        let envelope_id = encrypted
-            .as_ref()
-            .and_then(super::parse_reasoning_envelope)
-            .and_then(|envelope| envelope.item_id);
         let call_id = id
             .as_deref()
             .and_then(bound_call_id)
-            .or_else(|| metadata.item_id.as_deref().and_then(bound_call_id))
-            .or_else(|| envelope_id.as_deref().and_then(bound_call_id));
+            .or_else(|| metadata.item_id.as_deref().and_then(bound_call_id));
+        let call_id = match (call_id, encrypted.as_ref()) {
+            (None, Some(value)) => super::parse_reasoning_envelope(value)?
+                .and_then(|envelope| bound_call_id(envelope.item_id.as_deref()?)),
+            (call_id, _) => call_id,
+        };
         let Some(call_id) = call_id else {
             continue;
         };
@@ -92,6 +92,7 @@ pub fn restore_request_call_signatures(nodes: &mut Vec<Node>) {
         index += 1;
         keep
     });
+    Ok(())
 }
 
 /// Builds an encoder-local wire view without adding another signature to canonical storage.
@@ -622,26 +623,27 @@ mod tests {
                 _ => {}
             }
             let mut nodes = vec![transport, call];
-            restore_request_call_signatures(&mut nodes);
+            restore_request_call_signatures(&mut nodes).unwrap();
             assert_eq!(nodes.len(), 1, "{binding}");
             urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
                 &mut nodes,
                 "gemini",
                 "gemini-test",
                 true,
-            );
+            )
+            .unwrap();
             assert_eq!(signature(&nodes[0]), Some(json!("legacy")), "{binding}");
         }
         let mut nodes = vec![
             transport_node("native-1", json!("old")),
             response().output.remove(0),
         ];
-        restore_request_call_signatures(&mut nodes);
+        restore_request_call_signatures(&mut nodes).unwrap();
         assert_eq!(signature(&nodes[0]), Some(json!("Y2FsbA==")));
         if let Node::ToolCall { signature, .. } = &mut nodes[0] {
             *signature = None;
         }
-        restore_request_call_signatures(&mut nodes);
+        restore_request_call_signatures(&mut nodes).unwrap();
         assert_eq!(signature(&nodes[0]), None);
     }
 
@@ -649,13 +651,15 @@ mod tests {
     fn provider_model_mismatch_removes_signature_without_removing_call() {
         for (provider, model) in [("messages", "gemini-test"), ("gemini", "different")] {
             let mut original = response();
-            urp::wrap_reasoning_envelopes_in_response(&mut original, "gemini", "gemini-test");
+            urp::wrap_reasoning_envelopes_in_response(&mut original, "gemini", "gemini-test")
+                .unwrap();
             urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
                 &mut original.output,
                 provider,
                 model,
                 true,
-            );
+            )
+            .unwrap();
             assert_eq!(original.output.len(), 1);
             assert_eq!(signature(&original.output[0]), None);
             assert_eq!(project_response(&original).output.len(), 1);
@@ -680,7 +684,7 @@ mod tests {
             renamed("second"),
             renamed("third"),
         ];
-        urp::wrap_reasoning_envelopes_in_response(&mut response, "gemini", "gemini-test");
+        urp::wrap_reasoning_envelopes_in_response(&mut response, "gemini", "gemini-test").unwrap();
         let [text, control, first, second, third] = <[Node; 5]>::try_from(response.output).unwrap();
         let events = vec![
             response_start(),
@@ -720,13 +724,14 @@ mod tests {
         );
         let mut nodes = TerminalNode::into_nodes(output);
         assert!(nodes.iter().all(|node| signature(node).is_none()));
-        restore_request_call_signatures(&mut nodes);
+        restore_request_call_signatures(&mut nodes).unwrap();
         urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
             &mut nodes,
             "gemini",
             "gemini-test",
             true,
-        );
+        )
+        .unwrap();
         assert_eq!(
             nodes.iter().filter_map(signature).collect::<Vec<_>>(),
             vec![json!("Y2FsbA=="); 3]
@@ -768,7 +773,7 @@ mod tests {
             ]
         );
         let mut nodes = TerminalNode::into_nodes(output);
-        restore_request_call_signatures(&mut nodes);
+        restore_request_call_signatures(&mut nodes).unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(signature(&nodes[0]), Some(json!("Y2FsbA==")));
     }
@@ -1158,7 +1163,8 @@ mod tests {
                         &mut original,
                         "gemini",
                         "gemini-test",
-                    );
+                    )
+                    .unwrap();
                 }
                 let wire = match mode {
                     "raw" | "nonstream" => None,
@@ -1198,7 +1204,8 @@ mod tests {
                     "gemini",
                     "gemini-test",
                     true,
-                );
+                )
+                .unwrap();
                 let native = urp::encode::gemini::encode_request(&request, "gemini-test");
                 let part = native["contents"]
                     .as_array()

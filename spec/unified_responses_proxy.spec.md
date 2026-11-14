@@ -982,6 +982,11 @@ It MUST NOT retain another copy in internal extras or change the top-level `Reas
 The adapter MUST consume this provenance without emitting a separate metadata field on the wire.
 PG5a1 defines request normalization for bound function-call signatures, including legacy internal provenance.
 
+PR4c.6b. When a reasoning payload or bound call signature contains a disk-backed string under C5b, wrapping MUST encode the stored UTF-8 bytes in the envelope.
+On replay, Monoize MUST identify and decode an `mz2.` envelope from its stored bytes before applying provider provenance and model matching.
+Both operations MUST use bounded I/O buffers and keep string values larger than 65536 UTF-8 bytes in temporary files.
+A payload spool I/O failure during either operation MUST terminate the request or stream with a controlled error before sending the affected value.
+
 PR4c.7. If `reasoning_envelope_enabled = false`, Monoize MUST NOT wrap newly produced downstream encrypted reasoning payloads. If a downstream request nevertheless replays an `mz2.` envelope, Monoize MAY unwrap it before upstream encoding, but MUST NOT enforce the provider/model mismatch drop defined by PR4c.6. PG5a3 defines the provider-type provenance check that Gemini targets apply regardless of this setting.
 
 PR4c.8. Monoize MUST accept legacy `mz1.<item_id>.<payload>` reasoning signatures as replay input. When forwarding such a value to a Responses upstream, Monoize MUST set the reasoning item id to `<item_id>` and forward only `<payload>` as `encrypted_content`.

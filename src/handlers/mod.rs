@@ -883,6 +883,14 @@ fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str
     }
 }
 
+fn reasoning_envelope_io_error(error: std::io::Error) -> AppError {
+    AppError::new(
+        StatusCode::INSUFFICIENT_STORAGE,
+        "payload_spool_failed",
+        error.to_string(),
+    )
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 struct TriedProvider {
     attempt_number: u32,

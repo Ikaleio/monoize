@@ -3,8 +3,8 @@
 
 use crate::urp::decode::gemini::SIGNATURE_ID_PREFIX;
 use crate::urp::{
-    GEMINI_BOUND_ITEM_OFFSET_KEY, GEMINI_BOUND_OWNER_KEY, GEMINI_BOUND_SIGNATURE_KEY, Node,
-    parse_reasoning_envelope,
+    GEMINI_BOUND_ITEM_OFFSET_KEY, GEMINI_BOUND_OWNER_KEY, GEMINI_BOUND_SIGNATURE_KEY,
+    ReasoningEnvelope,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -291,49 +291,16 @@ pub(super) fn sign_current_turn_calls(contents: &mut [Value]) {
     }
 }
 
-/// Gemini accepts only its own signatures. Before envelope unwrapping, clears call signatures
-/// and drops reasoning signatures whose provenance is not Gemini: an `mz2.` envelope must name
-/// provider type `gemini`, an `mz1.` sigil must bind an `rs_gemini_` item id, and a raw
-/// reasoning value must belong to an `rs_gemini_` Reasoning id. Raw call signatures can only
-/// arrive through the Gemini call transport and are kept. Reasoning left without text is
-/// removed.
-pub fn retain_gemini_signature_provenance(nodes: &mut Vec<Node>) {
-    fn gemini_provenance(value: &Value, id: Option<&str>, raw_accepted: bool) -> bool {
-        let gemini_id = |id: &str| id.starts_with(SIGNATURE_ID_PREFIX);
-        match parse_reasoning_envelope(value) {
-            Some(envelope) if envelope.v == 2 => envelope.provider_type == "gemini",
-            Some(envelope) => envelope.item_id.as_deref().is_some_and(gemini_id),
-            None => raw_accepted || id.is_some_and(gemini_id),
-        }
+/// PG5a3: Gemini accepts raw call signatures because only its call transport produces them.
+pub(crate) fn has_gemini_signature_provenance(
+    envelope: Option<&ReasoningEnvelope>,
+    id: Option<&str>,
+    is_call: bool,
+) -> bool {
+    let gemini_id = |id: &str| id.starts_with(SIGNATURE_ID_PREFIX);
+    match envelope {
+        Some(envelope) if envelope.v == 2 => envelope.provider_type == "gemini",
+        Some(envelope) => envelope.item_id.as_deref().is_some_and(gemini_id),
+        None => is_call || id.is_some_and(gemini_id),
     }
-    nodes.retain_mut(|node| match node {
-        Node::ToolCall { signature, .. } => {
-            if signature
-                .as_ref()
-                .is_some_and(|value| !gemini_provenance(value, None, true))
-            {
-                *signature = None;
-            }
-            true
-        }
-        Node::Reasoning {
-            id,
-            metadata,
-            content,
-            summary,
-            encrypted,
-            ..
-        } => {
-            let foreign = encrypted.as_ref().is_some_and(|value| {
-                !gemini_provenance(value, id.as_deref().or(metadata.item_id.as_deref()), false)
-            });
-            if foreign {
-                *encrypted = None;
-                return content.as_deref().is_some_and(|text| !text.is_empty())
-                    || summary.as_deref().is_some_and(|text| !text.is_empty());
-            }
-            true
-        }
-        _ => true,
-    });
 }

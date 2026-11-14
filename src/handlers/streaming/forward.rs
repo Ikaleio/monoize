@@ -286,8 +286,8 @@ fn adapt_attempt_request(
     req: &mut urp::UrpRequest,
     attempt: &MonoizeAttempt,
     request: &StreamRequest,
-) {
-    shape_request_for_attempt(req, attempt, &request.auth, request.downstream);
+) -> AppResult<()> {
+    shape_request_for_attempt(req, attempt, &request.auth, request.downstream)?;
     // WS5a: the appended include is only for Responses attempts.
     if attempt.provider_type != ProviderType::Responses
         && request
@@ -301,6 +301,7 @@ fn adapt_attempt_request(
             req.extra_body.remove("include");
         }
     }
+    Ok(())
 }
 
 impl StreamForward {
@@ -436,7 +437,8 @@ impl StreamForward {
     ) -> AppResult<ChannelTry> {
         let mut req = attempt_request_from_original(&mut self.original_req, slot.final_slot);
         let request = &self.request;
-        adapt_attempt_request(&mut req, attempt, request);
+        adapt_attempt_request(&mut req, attempt, request)
+            .map_err(|err| self.fail_request(attempt, err))?;
         for rules in [
             &attempt.provider_transforms,
             &plan.global_transforms,

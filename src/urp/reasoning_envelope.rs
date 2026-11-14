@@ -1,11 +1,17 @@
 use super::{
     CHAT_REASONING_DETAIL_EXTRA_KEY, Node, NodeDelta, NodeHeader, ProviderProtocol,
-    ReasoningMetadata, UrpResponse, UrpStreamEvent, tool_signature,
+    ReasoningMetadata, UrpResponse, UrpStreamEvent,
+    encode::gemini::has_gemini_signature_provenance, tool_signature,
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use crate::payload::{self, JsonInput, ReadError, SpoolWriter};
+use base64::{
+    Engine as _, engine::general_purpose::URL_SAFE_NO_PAD, read::DecoderReader,
+    write::EncoderWriter,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{self, Read};
 
 /// Prefix for the signature sigil used to smuggle a reasoning item id through an
 /// Anthropic `thinking` / `redacted_thinking` block when the downstream client (Claude Code, etc.)
@@ -65,25 +71,67 @@ pub fn strip_reasoning_signature_sigil(signature: &str) -> String {
         .unwrap_or_else(|| signature.to_string())
 }
 
-pub fn parse_reasoning_envelope(value: &Value) -> Option<ReasoningEnvelope> {
-    let raw = value.as_str()?;
+/// Decodes a recognized reasoning envelope, including request-scoped disk-backed values.
+pub fn parse_reasoning_envelope(value: &Value) -> io::Result<Option<ReasoningEnvelope>> {
+    let Some(raw) = value.as_str() else {
+        return Ok(None);
+    };
+    if payload::has_large_text(raw) {
+        return Ok(parse_disk_envelope(raw)?.filter(valid_v2_envelope));
+    }
     if let Some(encoded) = raw.strip_prefix(REASONING_ENVELOPE_PREFIX) {
-        let decoded = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).ok()?;
-        let envelope = serde_json::from_slice::<ReasoningEnvelope>(&decoded).ok()?;
-        if envelope.v == 2 && !envelope.provider_type.is_empty() && !envelope.model.is_empty() {
-            return Some(envelope);
-        }
-        return None;
+        return Ok(URL_SAFE_NO_PAD
+            .decode(encoded)
+            .ok()
+            .and_then(|decoded| serde_json::from_slice(&decoded).ok())
+            .filter(valid_v2_envelope));
     }
 
-    let (item_id, payload) = unwrap_reasoning_signature_sigil(raw)?;
-    Some(ReasoningEnvelope {
-        v: 1,
-        provider_type: String::new(),
-        model: String::new(),
-        item_id: Some(item_id),
-        payload: Value::String(payload),
-    })
+    Ok(
+        unwrap_reasoning_signature_sigil(raw).map(|(item_id, payload)| ReasoningEnvelope {
+            v: 1,
+            provider_type: String::new(),
+            model: String::new(),
+            item_id: Some(item_id),
+            payload: Value::String(payload),
+        }),
+    )
+}
+
+fn valid_v2_envelope(envelope: &ReasoningEnvelope) -> bool {
+    envelope.v == 2 && !envelope.provider_type.is_empty() && !envelope.model.is_empty()
+}
+
+fn parse_disk_envelope(raw: &str) -> io::Result<Option<ReasoningEnvelope>> {
+    let mut reader = payload::text_reader(raw)?;
+    let mut prefix = [0; REASONING_ENVELOPE_PREFIX.len()];
+    reader.read_exact(&mut prefix)?;
+    if prefix != REASONING_ENVELOPE_PREFIX.as_bytes() {
+        return Ok(None);
+    }
+    let scope = payload::current().expect("large text has an owning payload");
+    let mut input = JsonInput::new(scope);
+    let mut decoder = DecoderReader::new(reader, &URL_SAFE_NO_PAD);
+    let mut buffer = vec![0; payload::CHUNK];
+    loop {
+        let count = match decoder.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = input.push(&buffer[..count]) {
+            return match error {
+                ReadError::Invalid(_) => Ok(None),
+                error => Err(io::Error::other(error)),
+            };
+        }
+    }
+    match input.finish() {
+        Ok(value) => Ok(serde_json::from_value(value).ok()),
+        Err(ReadError::Invalid(_)) => Ok(None),
+        Err(error) => Err(io::Error::other(error)),
+    }
 }
 
 fn reasoning_envelope_matches(
@@ -103,13 +151,13 @@ fn wrap_reasoning_payload(
     item_id: Option<&str>,
     provider_type: &str,
     model: &str,
-) {
+) -> io::Result<()> {
     let Some(payload) = encrypted.take() else {
-        return;
+        return Ok(());
     };
-    if !encrypted_value_is_non_empty(&payload) || parse_reasoning_envelope(&payload).is_some() {
+    if !encrypted_value_is_non_empty(&payload) || parse_reasoning_envelope(&payload)?.is_some() {
         *encrypted = Some(payload);
-        return;
+        return Ok(());
     }
 
     let envelope = ReasoningEnvelope {
@@ -119,28 +167,35 @@ fn wrap_reasoning_payload(
         item_id: item_id.filter(|id| !id.is_empty()).map(str::to_string),
         payload,
     };
-    let Ok(bytes) = serde_json::to_vec(&envelope) else {
-        *encrypted = Some(envelope.payload);
-        return;
+    let encoded = if payload::contains_large(&envelope.payload) {
+        let scope = payload::current().expect("large text has an owning payload");
+        let mut writer = EncoderWriter::new(SpoolWriter::new()?, &URL_SAFE_NO_PAD);
+        payload::write_json(&mut writer, &serde_json::to_value(envelope)?, Some(&scope))?;
+        scope.insert(writer.finish()?.finish()?)
+    } else {
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope)?)
     };
     *encrypted = Some(Value::String(format!(
-        "{REASONING_ENVELOPE_PREFIX}{}",
-        URL_SAFE_NO_PAD.encode(bytes)
+        "{REASONING_ENVELOPE_PREFIX}{encoded}"
     )));
+    Ok(())
 }
 
-fn wrap_reasoning_node_envelope(node: &mut Node, provider_type: &str, model: &str) {
+fn wrap_reasoning_node_envelope(
+    node: &mut Node,
+    provider_type: &str,
+    model: &str,
+) -> io::Result<()> {
     if let Node::ToolCall {
         call_id, signature, ..
     } = node
     {
-        wrap_reasoning_payload(
+        return wrap_reasoning_payload(
             signature,
             Some(&tool_signature::signature_item_id(call_id)),
             provider_type,
             model,
         );
-        return;
     }
     if let Node::Reasoning {
         id,
@@ -150,25 +205,27 @@ fn wrap_reasoning_node_envelope(node: &mut Node, provider_type: &str, model: &st
     } = node
     {
         extra_body.remove("encrypted_content");
-        wrap_reasoning_payload(encrypted, id.as_deref(), provider_type, model);
+        wrap_reasoning_payload(encrypted, id.as_deref(), provider_type, model)?;
     }
+    Ok(())
 }
 
 pub fn wrap_reasoning_envelopes_in_response(
     response: &mut UrpResponse,
     provider_type: &str,
     model: &str,
-) {
+) -> io::Result<()> {
     for node in &mut response.output {
-        wrap_reasoning_node_envelope(node, provider_type, model);
+        wrap_reasoning_node_envelope(node, provider_type, model)?;
     }
+    Ok(())
 }
 
-pub fn wrap_reasoning_envelope_in_stream_event(
+fn wrap_reasoning_envelope_in_stream_event(
     event: &mut UrpStreamEvent,
     provider_type: &str,
     model: &str,
-) {
+) -> io::Result<()> {
     match event {
         UrpStreamEvent::NodeStart {
             header: NodeHeader::ToolCall {
@@ -181,7 +238,7 @@ pub fn wrap_reasoning_envelope_in_stream_event(
                 Some(&tool_signature::signature_item_id(call_id)),
                 provider_type,
                 model,
-            );
+            )?;
         }
         UrpStreamEvent::NodeDelta {
             delta:
@@ -192,18 +249,19 @@ pub fn wrap_reasoning_envelope_in_stream_event(
                 },
             ..
         } => {
-            wrap_reasoning_payload(encrypted, metadata.item_id.as_deref(), provider_type, model);
+            wrap_reasoning_payload(encrypted, metadata.item_id.as_deref(), provider_type, model)?;
         }
         UrpStreamEvent::NodeDone { node, .. } => {
-            wrap_reasoning_node_envelope(node, provider_type, model)
+            wrap_reasoning_node_envelope(node, provider_type, model)?;
         }
         UrpStreamEvent::ResponseDone { output, .. } => {
             for entry in output {
-                wrap_reasoning_node_envelope(&mut entry.node, provider_type, model);
+                wrap_reasoning_node_envelope(&mut entry.node, provider_type, model)?;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -289,7 +347,7 @@ impl ReasoningEnvelopeStreamState {
         mut event: UrpStreamEvent,
         provider_type: &str,
         model: &str,
-    ) -> Vec<UrpStreamEvent> {
+    ) -> io::Result<Vec<UrpStreamEvent>> {
         if let UrpStreamEvent::NodeDelta {
             node_index,
             delta:
@@ -319,9 +377,9 @@ impl ReasoningEnvelopeStreamState {
                 extra_body,
             );
             if !has_non_encrypted_payload && usage.is_none() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
-            return vec![event];
+            return Ok(vec![event]);
         }
 
         if let UrpStreamEvent::NodeDone {
@@ -344,13 +402,13 @@ impl ReasoningEnvelopeStreamState {
             if let Some(complete) = complete {
                 let item_id = node_item_id.or(pending.item_id);
                 let mut wrapped = Some(complete);
-                wrap_reasoning_payload(&mut wrapped, item_id.as_deref(), provider_type, model);
+                wrap_reasoning_payload(&mut wrapped, item_id.as_deref(), provider_type, model)?;
                 if let Some(wrapped) = wrapped {
                     if let Node::Reasoning { encrypted, .. } = node {
                         *encrypted = Some(wrapped.clone());
                     }
                     self.assembled.insert(*node_index, wrapped.clone());
-                    return vec![
+                    return Ok(vec![
                         UrpStreamEvent::NodeDelta {
                             node_index: *node_index,
                             delta: NodeDelta::Reasoning {
@@ -367,7 +425,7 @@ impl ReasoningEnvelopeStreamState {
                             extra_body: pending.extra_body,
                         },
                         event,
-                    ];
+                    ]);
                 }
             }
         }
@@ -391,8 +449,8 @@ impl ReasoningEnvelopeStreamState {
             self.pending_fragments.clear();
             self.assembled.clear();
         }
-        wrap_reasoning_envelope_in_stream_event(&mut event, provider_type, model);
-        vec![event]
+        wrap_reasoning_envelope_in_stream_event(&mut event, provider_type, model)?;
+        Ok(vec![event])
     }
 }
 
@@ -401,42 +459,73 @@ pub fn filter_and_unwrap_reasoning_envelopes_for_upstream(
     provider_type: &str,
     model: &str,
     enforce_match: bool,
-) {
-    if provider_type == ProviderProtocol::Gemini.as_str() {
-        super::encode::gemini::retain_gemini_signature_provenance(nodes);
-    }
+) -> io::Result<()> {
+    let mut result = Ok(());
     nodes.retain_mut(|node| {
-        if let Node::ToolCall { signature, .. } = node {
-            if let Some(envelope) = signature.as_ref().and_then(parse_reasoning_envelope) {
-                *signature = if enforce_match
-                    && !reasoning_envelope_matches(&envelope, provider_type, model)
-                {
-                    None
-                } else {
-                    Some(envelope.payload)
-                };
-            }
+        if result.is_err() {
             return true;
         }
-        let Node::Reasoning {
-            encrypted,
-            metadata,
-            extra_body,
-            ..
-        } = node
-        else {
-            return true;
-        };
-        if let Some(envelope) = encrypted.as_ref().and_then(parse_reasoning_envelope) {
+        match unwrap_request_node(node, provider_type, model, enforce_match) {
+            Ok(keep) => keep,
+            Err(error) => {
+                result = Err(error);
+                true
+            }
+        }
+    });
+    result
+}
+
+fn unwrap_request_node(
+    node: &mut Node,
+    provider_type: &str,
+    model: &str,
+    enforce_match: bool,
+) -> io::Result<bool> {
+    let gemini = provider_type == ProviderProtocol::Gemini.as_str();
+    if let Node::ToolCall { signature, .. } = node {
+        if let Some(value) = signature {
+            let envelope = parse_reasoning_envelope(value)?;
+            if gemini && !has_gemini_signature_provenance(envelope.as_ref(), None, true) {
+                *signature = None;
+            } else if let Some(envelope) = envelope {
+                *signature = (!enforce_match
+                    || reasoning_envelope_matches(&envelope, provider_type, model))
+                .then_some(envelope.payload);
+            }
+        }
+        return Ok(true);
+    }
+    let Node::Reasoning {
+        id,
+        encrypted,
+        metadata,
+        extra_body,
+        content,
+        summary,
+        ..
+    } = node
+    else {
+        return Ok(true);
+    };
+    extra_body.remove("encrypted_content");
+    if let Some(value) = encrypted {
+        let envelope = parse_reasoning_envelope(value)?;
+        let item_id = id.as_deref().or(metadata.item_id.as_deref());
+        if gemini && !has_gemini_signature_provenance(envelope.as_ref(), item_id, false) {
+            *encrypted = None;
+            return Ok(content.as_ref().is_some_and(|text| !text.is_empty())
+                || summary.as_ref().is_some_and(|text| !text.is_empty()));
+        }
+        if let Some(envelope) = envelope {
             if enforce_match && !reasoning_envelope_matches(&envelope, provider_type, model) {
-                return false;
+                return Ok(false);
             }
             if let Some(item_id) = envelope.item_id.filter(|id| !id.is_empty()) {
                 metadata.item_id = Some(item_id);
             }
             *encrypted = Some(envelope.payload);
         }
-        extra_body.remove("encrypted_content");
-        true
-    });
+    }
+    Ok(true)
 }

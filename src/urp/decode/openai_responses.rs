@@ -90,7 +90,8 @@ fn decode_native_request(value: &Value) -> Result<UrpRequest, String> {
     if let Some(items) = obj.get("input") {
         decode_input_nodes(items, &mut input);
     }
-    crate::urp::tool_signature::restore_request_call_signatures(&mut input);
+    crate::urp::tool_signature::restore_request_call_signatures(&mut input)
+        .map_err(|error| error.to_string())?;
 
     let tools = obj.get("tools").and_then(Value::as_array).map(|tools| {
         tools

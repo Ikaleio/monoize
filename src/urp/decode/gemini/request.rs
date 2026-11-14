@@ -33,7 +33,7 @@ pub fn decode_request(value: &Value) -> Result<UrpRequest, String> {
     {
         decode_content(content, &mut input, &mut resolved_results)?;
     }
-    restore_request_call_signatures(&mut input);
+    restore_request_call_signatures(&mut input).map_err(|error| error.to_string())?;
 
     let generation_config = obj.get("generationConfig").and_then(Value::as_object);
     let generation = GenerationControls::decode(generation_config);
