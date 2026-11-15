@@ -84,6 +84,7 @@ function transform(ctx) {
 ## 大型負載
 
 `ctx.data` 中超過 64 KiB 的字串可能以控制代碼呈現，包括內嵌 Base64 與資料 URL。
+這也適用於由 `image_compress_input` 或 `image_compress_output` 重新編碼的影像。
 用 `Monoize.isLargeText(value)` 辨識控制代碼。用 `value.byteLength` 取得 UTF-8 位元組數。
 `Monoize.readText(value, offset, length)` 傳回最多 64 KiB 的 `Uint8Array`。
 位移從第 0 個位元組起算。讀取到字串結尾時停止。

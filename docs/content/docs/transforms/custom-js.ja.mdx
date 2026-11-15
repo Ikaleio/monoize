@@ -84,6 +84,7 @@ function transform(ctx) {
 ## 大きなペイロード
 
 `ctx.data` 内の 64 KiB を超える文字列は、ハンドルとして渡されることがあります。インライン Base64 とデータ URL も対象です。
+`image_compress_input` または `image_compress_output` で再エンコードした画像も対象です。
 ハンドルかどうかは `Monoize.isLargeText(value)` で確認します。UTF-8 のバイト長は `value.byteLength` で取得します。
 `Monoize.readText(value, offset, length)` は最大 64 KiB の `Uint8Array` を返します。
 オフセットは 0 バイト目から数えます。文字列の末尾で読み取りが止まります。

@@ -632,6 +632,13 @@ CUMI-14. The content cache root defaults to `${TMPDIR}/monoize/image-transform-c
 
 CUMI-15. Cache construction MUST scan the cache directory once, delete expired or invalid entries, evict oldest entries until startup file/byte quotas hold, and build a bounded in-memory metadata index containing key, byte count, modification time, and LRU sequence. Point reads and writes MUST use that index and MUST NOT rescan the cache directory. A point read MUST verify the indexed file's current size before allocating its contents. Point reads MUST update LRU order. A stale point-read observation MUST NOT delete a concurrently published replacement for the same key; validation and deletion MUST serialize with replacement or perform equivalent identity revalidation. Writes MUST evict through the ordered metadata index and MUST update metadata only after atomic rename succeeds. A deletion failure MUST leave metadata accounting intact and fail that cleanup/write operation. Periodic cleanup MAY traverse the bounded metadata index and MUST NOT rescan the directory.
 
+CUMI-16. When a request-scoped payload store is available, a replacement image's
+Base64 string longer than 65536 bytes MUST enter that store before the transform
+returns it. Apply the same rule to freshly encoded and cached images. Store actual
+Base64 in the image cache. Subsequent custom transforms MUST see the replacement
+as an opaque handle per CJS-JS-11. If writing the replacement to the payload store
+fails, the transform MUST keep the original source and log the write failure.
+
 RIU-1. `image_resolve_urls` supports request and response phases. It MUST process request input, non-streaming response output, stream `NodeDone` image nodes, and stream `ResponseDone.output`. Other stream events remain unchanged.
 
 RIU-2. Config MAY contain:
@@ -913,6 +920,8 @@ CAOI-9. The output format selection and encoding rules MUST be identical to CUMI
 CAOI-10. The cache key material and cache key algorithm MUST be identical to CUMI-9 and CUMI-10.
 
 CAOI-11. Cache persistence, eviction, and failure isolation MUST apply equally to eligible ordinary, tool-result, and tool-call image sources and assistant image deltas.
+
+CAOI-12. CUMI-16 applies to each replacement in non-stream responses and stream events.
 
 ### 4.9 `prompt_strip_anthropic_billing_header`
 

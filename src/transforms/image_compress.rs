@@ -697,10 +697,10 @@ async fn compress_base64_image(
     }
     let source_media_type = detected_media_type(&original).unwrap_or(media_type);
     let corrected_source = || {
-        (source_media_type != media_type).then(|| ImageSource::Base64 {
-            media_type: source_media_type.to_string(),
-            data: base64_data.to_string(),
-        })
+        if source_media_type == media_type {
+            return None;
+        }
+        compressed_image_source(source_media_type.to_owned(), base64_data.to_owned())
     };
     let cache_key = build_cache_key(source_media_type, cfg, &original);
     if let Some(hit) = context
@@ -709,10 +709,7 @@ async fn compress_base64_image(
         .await
         .map_err(TransformError::Apply)?
     {
-        return Ok(Some(ImageSource::Base64 {
-            media_type: hit.media_type,
-            data: hit.data_base64,
-        }));
+        return Ok(compressed_image_source(hit.media_type, hit.data_base64));
     }
 
     let original_len = original.len();
@@ -749,10 +746,23 @@ async fn compress_base64_image(
     {
         tracing::warn!("persist image transform cache entry failed: {err}");
     }
-    Ok(Some(ImageSource::Base64 {
-        media_type: payload.media_type,
-        data: payload.data_base64,
-    }))
+    Ok(compressed_image_source(
+        payload.media_type,
+        payload.data_base64,
+    ))
+}
+
+fn compressed_image_source(media_type: String, mut data: String) -> Option<ImageSource> {
+    if data.len() > crate::payload::CHUNK && crate::payload::current().is_some() {
+        data = match crate::payload::spool_utf8(data.as_bytes()) {
+            Ok(marker) => marker,
+            Err(error) => {
+                tracing::warn!(%error, "retain original image after payload spool write failed");
+                return None;
+            }
+        };
+    }
+    Some(ImageSource::Base64 { media_type, data })
 }
 
 fn is_supported_media_type(media_type: &str) -> bool {

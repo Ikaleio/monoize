@@ -84,6 +84,7 @@ function transform(ctx) {
 ## Large payloads
 
 Strings larger than 64 KiB can appear as opaque handles in `ctx.data`. This includes inline Base64 and data URLs.
+This also applies to images re-encoded by `image_compress_input` and `image_compress_output`.
 Use `Monoize.isLargeText(value)` to recognize a handle. Use `value.byteLength` to get the UTF-8 byte length.
 `Monoize.readText(value, offset, length)` returns a `Uint8Array` of up to 64 KiB.
 Offsets are zero-based byte offsets. Reads stop at the end of the value.
