@@ -122,14 +122,14 @@ fn parse_disk_envelope(raw: &str) -> io::Result<Option<ReasoningEnvelope>> {
         };
         if let Err(error) = input.push(&buffer[..count]) {
             return match error {
-                ReadError::Invalid(_) => Ok(None),
+                ReadError::Invalid(_) | ReadError::JsonLimit { .. } => Ok(None),
                 error => Err(io::Error::other(error)),
             };
         }
     }
     match input.finish() {
         Ok(value) => Ok(serde_json::from_value(value).ok()),
-        Err(ReadError::Invalid(_)) => Ok(None),
+        Err(ReadError::Invalid(_) | ReadError::JsonLimit { .. }) => Ok(None),
         Err(error) => Err(io::Error::other(error)),
     }
 }

@@ -506,7 +506,8 @@ Embeddings、compact、决策和图像端点遵循相同的状态码规则，并
 
 | HTTP 状态码 | 错误码 | 含义 |
 | --- | --- | --- |
-| `400`、`413`、`415`、`422` | `invalid_json` | 请求体不是有效 JSON、过大、内容类型不是 JSON，或结构错误 |
+| `400`、`415`、`422` | `invalid_json` | 请求体不是有效 JSON、Content-Type 不是 JSON，或结构错误 |
+| `413` | `request_too_large` | 请求超出 HTTP 请求体或 JSON 大小上限 |
 | `401` | `unauthorized` | API 密钥缺失、无效、被禁用或已过期 |
 | `402` | `insufficient_balance` | 用户或子账户余额不足 |
 | `403` | `model_not_allowed` | 密钥的模型限制拒绝了请求的模型 |

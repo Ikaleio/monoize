@@ -6,11 +6,17 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 const STRUCTURE_LIMIT: usize = 4 * 1024 * 1024;
+const REQUEST_COMPACT_LIMIT: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReadError {
     #[error("body exceeds {0} bytes")]
     Limit(usize),
+    #[error("{component} exceeds {limit} bytes")]
+    JsonLimit {
+        component: &'static str,
+        limit: usize,
+    },
     #[error("{0}")]
     Transport(String),
     #[error("{0}")]
@@ -24,23 +30,14 @@ pub(crate) async fn read_json(
     payload: Arc<Payload>,
     limit: usize,
 ) -> Result<Value, ReadError> {
-    let mut input = JsonInput::new(payload);
-    let mut bytes = 0usize;
-    tokio::pin!(stream);
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        bytes = bytes.saturating_add(chunk.len());
-        if bytes > limit {
-            return Err(ReadError::Limit(limit));
-        }
-        input.push(&chunk)?;
-    }
-    input.finish()
+    JsonInput::new(payload).read(stream, limit).await
 }
 
 pub(crate) struct JsonInput {
     payload: Arc<Payload>,
     compact: Vec<u8>,
+    compact_limit: usize,
+    structure_remaining: usize,
     string: Option<JsonString>,
     // Object member names are the only quoted tokens followed by a colon.
     pending_string: Option<JsonString>,
@@ -51,9 +48,36 @@ impl JsonInput {
         Self {
             payload,
             compact: Vec::new(),
+            compact_limit: STRUCTURE_LIMIT,
+            structure_remaining: STRUCTURE_LIMIT,
             string: None,
             pending_string: None,
         }
+    }
+
+    pub(super) fn for_request(payload: Arc<Payload>) -> Self {
+        Self {
+            compact_limit: REQUEST_COMPACT_LIMIT,
+            ..Self::new(payload)
+        }
+    }
+
+    pub(super) async fn read(
+        mut self,
+        stream: impl Stream<Item = Result<Bytes, ReadError>>,
+        limit: usize,
+    ) -> Result<Value, ReadError> {
+        let mut bytes = 0usize;
+        tokio::pin!(stream);
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            bytes = bytes.saturating_add(chunk.len());
+            if bytes > limit {
+                return Err(ReadError::Limit(limit));
+            }
+            self.push(&chunk)?;
+        }
+        self.finish()
     }
 
     pub(crate) fn push(&mut self, mut bytes: &[u8]) -> Result<(), ReadError> {
@@ -78,7 +102,7 @@ impl JsonInput {
                 self.append_string(string, bytes[0] == b':')?;
             }
             let next = memchr::memchr(b'"', bytes).unwrap_or(bytes.len());
-            self.append(&bytes[..next])?;
+            self.append(&bytes[..next], next)?;
             if next == bytes.len() {
                 break;
             }
@@ -88,11 +112,19 @@ impl JsonInput {
         Ok(())
     }
 
-    fn append(&mut self, bytes: &[u8]) -> Result<(), ReadError> {
-        if self.compact.len().saturating_add(bytes.len()) > STRUCTURE_LIMIT {
-            return Err(ReadError::Invalid(format!(
-                "JSON structure exceeds {STRUCTURE_LIMIT} bytes"
-            )));
+    fn append(&mut self, bytes: &[u8], structure_len: usize) -> Result<(), ReadError> {
+        self.structure_remaining =
+            self.structure_remaining
+                .checked_sub(structure_len)
+                .ok_or(ReadError::JsonLimit {
+                    component: "JSON structure",
+                    limit: STRUCTURE_LIMIT,
+                })?;
+        if self.compact.len().saturating_add(bytes.len()) > self.compact_limit {
+            return Err(ReadError::JsonLimit {
+                component: "In-memory JSON",
+                limit: self.compact_limit,
+            });
         }
         self.compact.extend_from_slice(bytes);
         Ok(())
@@ -102,7 +134,9 @@ impl JsonInput {
         let text = string.finish(&self.payload, key)?;
         let encoded =
             serde_json::to_vec(&text).map_err(|error| ReadError::Invalid(error.to_string()))?;
-        self.append(&encoded)
+        // Value text has its own budget; its two quotes still contribute to the structure.
+        let structure_len = if key { encoded.len() } else { 2 };
+        self.append(&encoded, structure_len)
     }
 
     pub(crate) fn finish(mut self) -> Result<Value, ReadError> {

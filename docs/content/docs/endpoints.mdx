@@ -506,7 +506,8 @@ Embeddings, compact, decision, and image endpoints follow the same status rule a
 
 | HTTP status | Code | Meaning |
 | --- | --- | --- |
-| `400`, `413`, `415`, `422` | `invalid_json` | The body is invalid JSON, too large, not JSON content, or has the wrong shape |
+| `400`, `415`, `422` | `invalid_json` | The body is invalid JSON, has a non-JSON content type, or has the wrong shape |
+| `413` | `request_too_large` | The request exceeds an HTTP body or JSON size limit |
 | `401` | `unauthorized` | The API key is missing, invalid, disabled, or expired |
 | `402` | `insufficient_balance` | The user or sub-account balance is empty |
 | `403` | `model_not_allowed` | The key's model limits reject the requested model |

@@ -506,7 +506,8 @@ Embeddings、compact、意思決定、画像の各エンドポイントは同じ
 
 | HTTP ステータス | コード | 意味 |
 | --- | --- | --- |
-| `400`、`413`、`415`、`422` | `invalid_json` | ボディが無効な JSON、大きすぎる、JSON コンテンツでない、または構造が不正 |
+| `400`、`415`、`422` | `invalid_json` | ボディが無効な JSON、Content-Type が JSON でない、または構造が不正 |
+| `413` | `request_too_large` | HTTP リクエストボディまたは JSON のサイズ上限を超過 |
 | `401` | `unauthorized` | API キーが未指定、無効、無効化済み、または期限切れ |
 | `402` | `insufficient_balance` | ユーザーまたはサブアカウントの残高が不足 |
 | `403` | `model_not_allowed` | キーのモデル制限が要求モデルを拒否 |

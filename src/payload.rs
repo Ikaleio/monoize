@@ -463,12 +463,15 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for JsonBody {
                 ReadError::Transport(error.to_string())
             })
         });
-        read_json(stream, payload, limit)
+        JsonInput::for_request(payload)
+            .read(stream, limit)
             .await
             .map(Self)
             .map_err(|error| {
                 let (status, code) = match error {
-                    ReadError::Limit(_) => (StatusCode::PAYLOAD_TOO_LARGE, "request_too_large"),
+                    ReadError::Limit(_) | ReadError::JsonLimit { .. } => {
+                        (StatusCode::PAYLOAD_TOO_LARGE, "request_too_large")
+                    }
                     ReadError::Spool(_) => {
                         (StatusCode::INSUFFICIENT_STORAGE, "payload_spool_failed")
                     }

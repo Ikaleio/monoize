@@ -238,10 +238,14 @@ retain C5's default. The WebSocket message limit remains governed by WS13.
 Multipart image files also use the Images POST route limit.
 
 C5b. On these routes, decode JSON and SSE with bounded input buffers. Spill decoded
-JSON string values larger than 65536 UTF-8 bytes to temporary files. Keep the
-remaining serialized JSON structure, including keys, within 4194304 bytes per
-document. Reject invalid JSON or structure that exceeds this limit before running
-transforms. JSON nesting retains the serde_json limit. Transfer large values in
+JSON string values larger than 65536 UTF-8 bytes to temporary files. For each HTTP
+request document, limit the serialized JSON retained after spooling to 16777216
+bytes. Within that limit, allow up to 4194304 bytes for keys, delimiters, and other
+bytes outside the contents of string values. Upstream JSON documents and SSE JSON
+events retain the 4194304-byte limit for the entire serialized JSON after spooling.
+Reject invalid JSON or an exceeded limit before running transforms. Return HTTP
+413 with code `request_too_large` when a request exceeds either aggregate JSON limit.
+JSON nesting retains the serde_json limit. Transfer large values in
 chunks of at most 65536 bytes in JSON and SSE egress. HTTP chunk boundaries MUST NOT
 change the JSON or SSE event boundaries. Apply the upstream idle timeout between
 body chunks, including while reading one SSE event.

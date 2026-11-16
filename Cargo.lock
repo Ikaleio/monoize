@@ -2459,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "monoize"
-version = "1.15.2"
+version = "1.15.3"
 dependencies = [
  "argon2",
  "async-trait",
