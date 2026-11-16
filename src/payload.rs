@@ -9,7 +9,7 @@ use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -33,7 +33,7 @@ tokio::task_local! {
 
 #[derive(Default)]
 pub(crate) struct Payload {
-    strings: Mutex<HashMap<String, Arc<Spool>>>,
+    strings: Mutex<HashMap<String, DiskText>>,
 }
 
 pub(crate) fn current() -> Option<Arc<Payload>> {
@@ -178,13 +178,30 @@ impl Write for OpenSpool {
 
 impl Payload {
     pub(crate) fn insert(&self, spool: Spool) -> String {
-        let marker = format!("{PREFIX}{}~", hex::encode(spool.digest));
+        let marker = text_marker(&spool.digest);
+        let len = spool.len;
         self.strings
             .lock()
             .unwrap()
             .entry(marker.clone())
-            .or_insert_with(|| Arc::new(spool));
+            .or_insert_with(|| DiskText {
+                spool: Arc::new(spool),
+                start: 0,
+                len,
+            });
         marker
+    }
+
+    fn insert_ranges(&self, spool: Spool, ranges: HashMap<String, (u64, u64)>) {
+        let spool = Arc::new(spool);
+        let mut strings = self.strings.lock().unwrap();
+        for (marker, (start, len)) in ranges {
+            strings.entry(marker).or_insert_with(|| DiskText {
+                spool: spool.clone(),
+                start,
+                len,
+            });
+        }
     }
 
     pub(crate) fn parts<'a, 'b>(&'b self, mut text: &'a str) -> impl Iterator<Item = Part<'a>> + 'b
@@ -220,9 +237,35 @@ impl Payload {
     }
 }
 
+fn text_marker(digest: &[u8]) -> String {
+    format!("{PREFIX}{}~", hex::encode(digest))
+}
+
+#[derive(Clone)]
+pub(crate) struct DiskText {
+    spool: Arc<Spool>,
+    start: u64,
+    len: u64,
+}
+
+impl DiskText {
+    pub(crate) fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub(crate) fn reader_at(&self, offset: u64) -> io::Result<io::Take<File>> {
+        let offset = offset.min(self.len);
+        let mut file = self.spool.open()?;
+        if self.start + offset != 0 {
+            file.seek(SeekFrom::Start(self.start + offset))?;
+        }
+        Ok(file.take(self.len - offset))
+    }
+}
+
 pub(crate) enum Part<'a> {
     Inline(&'a str),
-    Disk(Arc<Spool>),
+    Disk(DiskText),
 }
 
 pub(crate) fn has_large_text(text: &str) -> bool {
@@ -328,7 +371,7 @@ impl Read for TextReader<'_> {
             }
             self.active = match self.parts.next() {
                 Some(Part::Inline(text)) => Some(Box::new(text.as_bytes())),
-                Some(Part::Disk(spool)) => Some(Box::new(spool.open()?)),
+                Some(Part::Disk(spool)) => Some(Box::new(spool.reader_at(0)?)),
                 None => return Ok(0),
             };
         }

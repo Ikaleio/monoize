@@ -238,13 +238,21 @@ retain C5's default. The WebSocket message limit remains governed by WS13.
 Multipart image files also use the Images POST route limit.
 
 C5b. On these routes, decode JSON and SSE with bounded input buffers. Spill decoded
-JSON string values larger than 65536 UTF-8 bytes to temporary files. For each HTTP
-request document, limit the serialized JSON retained after spooling to 16777216
-bytes. Within that limit, allow up to 4194304 bytes for keys, delimiters, and other
-bytes outside the contents of string values. Upstream JSON documents and SSE JSON
-events retain the 4194304-byte limit for the entire serialized JSON after spooling.
-Reject invalid JSON or an exceeded limit before running transforms. Return HTTP
-413 with code `request_too_large` when a request exceeds either aggregate JSON limit.
+JSON string values larger than 65536 UTF-8 bytes to temporary files. In each HTTP
+request, also spill plain conversation text when its serialized contents would
+bring the total retained inline string contents over 16777216 bytes and its
+decoded text, excluding any retained data URL header, is at least 1024 bytes.
+This rule applies to text in `input`, `messages`, `instructions`, `system`,
+and `prompt`, including message content, reasoning text, and tool result text.
+Structured tool arguments and control fields retain the per-string rule.
+Collect the additional strings in a shared request file with an independently
+bounded byte range per string. Object keys remain inline. For each HTTP request, limit keys,
+delimiters, and other bytes outside string value contents to 16777216 bytes.
+Limit the serialized JSON retained after spooling, including references, to
+67108864 bytes. Upstream JSON documents and SSE JSON events retain the 4194304-byte
+limit for the entire serialized JSON after spooling. Reject invalid JSON or an
+exceeded limit before running transforms. Return HTTP 413 with code
+`request_too_large` when a request exceeds either aggregate JSON limit.
 JSON nesting retains the serde_json limit. Transfer large values in
 chunks of at most 65536 bytes in JSON and SSE egress. HTTP chunk boundaries MUST NOT
 change the JSON or SSE event boundaries. Apply the upstream idle timeout between

@@ -21,7 +21,7 @@ description: Monoize 程序的環境變數。
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 受信任的反向代理網段；明確設為空值即停用信任 |
 | `MONOIZE_UPSTREAM_PROXY_URL` | 未設定 | 上游呼叫的對外 HTTP(S) 代理；Channel 可用 `proxy_url` 個別覆寫 |
 
-這些 POST 路由會將大型字串值移到磁碟。之後，每份 JSON 請求最多可在記憶體中保留 16 MiB，其中鍵名和 JSON 結構最多占 4 MiB。
+請求中的行內文字累計超過 16 MiB 時，剖析器會將對話文字寫入磁碟。寫入磁碟後，序列化請求最多占 64 MiB，其中鍵名和 JSON 結構最多占 16 MiB。
 
 ## 資料庫
 

@@ -11,7 +11,7 @@ use rquickjs::context::EvalOptions;
 use rquickjs::{Context, Ctx, Exception, Function, Runtime};
 use serde_json::{Value, json};
 use std::cell::Cell;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -507,9 +507,10 @@ fn read_large_text(
                 offset = 0;
             }
             Part::Disk(spool) => {
-                let mut file = spool.open()?;
-                file.seek(SeekFrom::Start(offset))?;
-                file.take(remaining as u64).read_to_end(&mut bytes)?;
+                spool
+                    .reader_at(offset)?
+                    .take(remaining as u64)
+                    .read_to_end(&mut bytes)?;
                 offset = 0;
             }
         }

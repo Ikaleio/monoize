@@ -84,6 +84,7 @@ function transform(ctx) {
 ## 大负载
 
 `ctx.data` 中超过 64 KiB 的字符串可能以句柄形式出现，包括内联 Base64 和数据 URL。
+请求中的内联文本达到总量上限后，较短的对话文本也可能以句柄形式出现。
 经 `image_compress_input` 或 `image_compress_output` 重新编码的图片也适用。
 用 `Monoize.isLargeText(value)` 识别句柄。用 `value.byteLength` 读取 UTF-8 字节数。
 `Monoize.readText(value, offset, length)` 返回最多 64 KiB 的 `Uint8Array`。
