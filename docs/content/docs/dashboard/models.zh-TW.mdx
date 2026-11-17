@@ -24,7 +24,7 @@ Channel 的模型條目可以用 `redirect` 指定真實的上游模型名稱。
 
 - **模型定價**：每個模型一筆價格記錄。每筆記錄設定計費模式：`per_token`、`per_request` 或 `tiered_expr`。
   `tiered_expr` 可以保存依輸入 token 閾值劃分的階梯價格，以及 Fast / Priority 價格表。
-  當上游回應的 `service_tier` 為 `fast` 或 `priority` 時，Monoize 使用 Fast 價格。
+  傳入請求的 `service_tier` 為 `fast` 或 `priority` 時採用 Fast 費率，為 `ultrafast` 時採用 Ultrafast 費率。即使上游回傳 `default`，仍按請求的層級計費。
   當 Anthropic 的 `usage.speed` 為 `fast` 時，Monoize 也使用 Fast 價格。
   缺少必填價格的記錄顯示**不完整**，按缺少記錄處理。
 - **未定價模型**：已對應但沒有啟用價格記錄的模型。分頁上顯示數量，每列註明提供該模型的 Provider 與 Channel。

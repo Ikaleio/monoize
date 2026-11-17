@@ -281,10 +281,30 @@ pub(super) async fn maybe_charge_settled(
         response_service_tier,
     } = request;
     let usage_speed = usage.usage().and_then(super::usage::usage_service_tier);
-    let service_tier = response_service_tier
+    let reported = response_service_tier
         .map(str::trim)
         .filter(|tier| !tier.is_empty())
         .or(usage_speed);
+    let requested = attempt
+        .requested_service_tier
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let premium = |tier: &str| {
+        ["fast", "priority", "ultrafast"]
+            .iter()
+            .any(|name| tier.eq_ignore_ascii_case(name))
+    };
+    let openai = matches!(
+        attempt.provider_type,
+        ProviderType::Responses | ProviderType::ChatCompletion | ProviderType::OpenaiDecisions
+    );
+    let service_tier =
+        if requested.is_some_and(premium) || (openai && reported.is_some_and(premium)) {
+            requested
+        } else {
+            reported
+        };
     let inputs = SettlementInputs {
         usage,
         output,

@@ -17,6 +17,7 @@ async fn decode(frames: &[Value]) -> Vec<UrpStreamEvent> {
             .unwrap(),
     );
     let request = crate::handlers::UrpRequest {
+        requested_service_tier: None,
         audio_output_format: None,
         model: "chat-test".into(),
         max_multiplier: None,

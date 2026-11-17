@@ -62,6 +62,7 @@ async fn decode_raw_stream(wire: String, custom_names: &[&str]) -> Vec<UrpStream
         .unwrap();
     let upstream = reqwest::Response::from(raw);
     let request = crate::handlers::UrpRequest {
+        requested_service_tier: None,
         audio_output_format: None,
         model: "claude-test".into(),
         max_multiplier: None,

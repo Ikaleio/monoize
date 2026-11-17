@@ -143,6 +143,7 @@ async fn synthetic_decode(
     let request = crate::handlers::UrpRequest {
         model: "model-contract".into(),
         max_multiplier: None,
+        requested_service_tier: None,
         audio_output_format: None,
         server_tool_usage_classes: Vec::new(),
         messages_custom_tool_names: Default::default(),

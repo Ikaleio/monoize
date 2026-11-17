@@ -33,6 +33,7 @@ async fn decode_chat_wire(wire: String, audio_format: Option<&str>) -> Vec<UrpSt
     let request = crate::handlers::UrpRequest {
         model: "chat-test".into(),
         max_multiplier: None,
+        requested_service_tier: None,
         audio_output_format: audio_format.map(str::to_string),
         server_tool_usage_classes: vec![],
         messages_custom_tool_names: HashSet::new(),

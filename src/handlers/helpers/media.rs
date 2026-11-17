@@ -255,6 +255,7 @@ mod media_resource_routing_tests {
             logical_model: "test-model".into(),
             upstream_model: "upstream-model".into(),
             model_multiplier: Multiplier::ONE,
+            requested_service_tier: None,
             server_tool_usage_classes: vec![],
             provider_transforms: vec![],
             passive_failure_count_threshold: 0,

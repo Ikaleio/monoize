@@ -1019,6 +1019,7 @@ async fn gemini_compound_document_response_expands_consistently_in_live_frames()
 
 fn handler_request() -> crate::handlers::UrpRequest {
     crate::handlers::UrpRequest {
+        requested_service_tier: None,
         audio_output_format: None,
         model: "gemini-test".into(),
         max_multiplier: None,

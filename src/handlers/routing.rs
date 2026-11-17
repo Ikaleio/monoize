@@ -613,6 +613,7 @@ pub(super) async fn collect_provider_attempts(
             logical_model: urp.model.clone(),
             upstream_model: resolve_upstream_model(&urp.model, model_entry),
             model_multiplier: model_entry.multiplier,
+            requested_service_tier: urp.requested_service_tier.clone(),
             server_tool_usage_classes: urp.server_tool_usage_classes.clone(),
             provider_transforms: provider.transforms.clone(),
             passive_failure_count_threshold: channel

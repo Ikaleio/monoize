@@ -56,7 +56,7 @@ async fn count_messages_tokens_inner(
     apply_configured_model_redirects_to_model(state, &mut logical_model, &auth).await;
     ensure_model_allowed(&auth, &logical_model)?;
 
-    let routing_stub = build_embeddings_routing_stub(&logical_model, None);
+    let routing_stub = build_embeddings_routing_stub(&logical_model, None, None);
     let mut attempts = build_monoize_attempts(state, &routing_stub, &auth).await?;
     attempts.retain(|attempt| attempt.provider_type == ProviderType::Messages);
     if attempts.is_empty() {

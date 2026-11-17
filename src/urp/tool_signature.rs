@@ -1008,6 +1008,7 @@ mod tests {
     /// Decodes a downstream SSE body as an upstream stream of the same protocol.
     async fn decode_wire(provider: ProviderType, bytes: axum::body::Bytes) -> UrpResponse {
         let handler = crate::handlers::UrpRequest {
+            requested_service_tier: None,
             audio_output_format: None,
             model: "client-model".into(),
             max_multiplier: None,

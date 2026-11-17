@@ -187,9 +187,11 @@ MP-R6. Modality does not select prices. Service tier selects prices only through
 `billing_expr.service_tiers` (§4.4). Settlement MUST read the settled selector in this
 order:
 
-1. the upstream response `service_tier` when present;
-2. otherwise `usage.speed` when present (Anthropic Fast mode);
-3. otherwise the selector is absent.
+1. An inbound `service_tier` of `priority`, `fast`, or `ultrafast` selects the requested tier, regardless of the upstream response.
+2. For an OpenAI Responses, Chat Completions, or Decisions upstream reporting one of those premium tiers, use the inbound selector. An absent inbound selector uses standard pricing.
+3. Otherwise use the upstream response selector, then `usage.speed` (including native Anthropic Fast mode), then the standard table.
+
+Capture the inbound selector before provider transforms and retain it for every attempt. This applies to JSON, SSE, compact responses, and individual WebSocket turns. Downstream responses retain the upstream-reported tier.
 
 Normalize the selector as follows, case-insensitive after trim:
 

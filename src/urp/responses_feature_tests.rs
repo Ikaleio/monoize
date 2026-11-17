@@ -129,6 +129,7 @@ async fn decode_stream_body_result(
     let request = crate::handlers::UrpRequest {
         model: "feature-model".into(),
         max_multiplier: None,
+        requested_service_tier: None,
         audio_output_format: None,
         server_tool_usage_classes: vec![],
         messages_custom_tool_names: HashSet::new(),

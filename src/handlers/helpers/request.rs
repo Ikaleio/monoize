@@ -138,6 +138,11 @@ pub(in crate::handlers) fn build_routing_stub(
     max_multiplier: Option<Multiplier>,
 ) -> UrpRequest {
     UrpRequest {
+        requested_service_tier: req
+            .extra_body
+            .get("service_tier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         audio_output_format: req
             .extra_body
             .get("audio")
@@ -156,8 +161,10 @@ pub(in crate::handlers) fn build_routing_stub(
 pub(in crate::handlers) fn build_embeddings_routing_stub(
     model: &str,
     max_multiplier: Option<Multiplier>,
+    service_tier: Option<&Value>,
 ) -> UrpRequest {
     UrpRequest {
+        requested_service_tier: service_tier.and_then(Value::as_str).map(str::to_owned),
         audio_output_format: None,
         model: model.to_string(),
         max_multiplier,

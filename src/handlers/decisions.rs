@@ -45,7 +45,8 @@ async fn create_decision(
 
     let max_multiplier = resolve_max_multiplier_for_embeddings(&body, &headers, &auth);
     let started_at = Instant::now();
-    let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
+    let routing_stub =
+        build_embeddings_routing_stub(&logical_model, max_multiplier, body.get("service_tier"));
     let mut attempts = build_decision_attempts(&state, &routing_stub, &auth).await?;
     attach_client_session_id(&mut attempts, extract_client_session_id(&headers), None);
     let endpoint = DecisionForward::plan(downstream, object, &logical_model, &mut attempts)?;

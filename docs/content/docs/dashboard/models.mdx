@@ -24,7 +24,7 @@ The **Model Pricing** page is the pricing console. It has four tabs:
 
 - **Model Pricing**: one price row per model. Each row sets a billing mode: `per_token`, `per_request`, or `tiered_expr`.
   `tiered_expr` can store context-window price steps and a Fast / Priority table.
-  Monoize applies Fast prices when the upstream response `service_tier` is `fast` or `priority`.
+  An inbound `service_tier` of `fast` or `priority` selects Fast pricing. Use `ultrafast` to select Ultrafast pricing. These requests keep their tier when the upstream reports `default`.
   It also applies Fast prices when Anthropic `usage.speed` is `fast`.
   A row without its required price shows **Incomplete** and is billed like a missing row.
 - **Unpriced Models**: mapped models that have no enabled price row. The tab label shows the count, and each row names the Provider and Channel that serve the model.

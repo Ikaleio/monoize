@@ -24,7 +24,7 @@ Channel のモデルエントリでは、`redirect` に実際の上流モデル�
 
 - **モデル価格**：モデルごとに 1 件の価格レコード。各レコードは課金モードを設定します：`per_token`、`per_request`、`tiered_expr`。
   `tiered_expr` は、入力 token 閾値ごとの段階価格と Fast / Priority 価格表を保存できます。
-  上流応答の `service_tier` が `fast` または `priority` のとき、Monoize は Fast 価格を使います。
+  受信した `service_tier` が `fast` または `priority` の場合は Fast 料金を、`ultrafast` の場合は Ultrafast 料金を適用します。上流が `default` を返しても、リクエストの料金区分を適用します。
   Anthropic の `usage.speed` が `fast` のときも、Monoize は Fast 価格を使います。
   必須の価格が無いレコードは**不完全**と表示され、レコードが無い場合と同じ扱いになります。
 - **未価格モデル**：対応付け済みで、有効な価格レコードがないモデル。タブに件数を表示し、各行にそのモデルを提供する Provider と Channel を表示します。

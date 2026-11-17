@@ -689,7 +689,8 @@ pub async fn create_embeddings(
 
     let max_multiplier = resolve_max_multiplier_for_embeddings(&body, &headers, &auth);
     let started_at = std::time::Instant::now();
-    let routing_stub = build_embeddings_routing_stub(&logical_model, max_multiplier);
+    let routing_stub =
+        build_embeddings_routing_stub(&logical_model, max_multiplier, body.get("service_tier"));
     let mut attempts = build_monoize_attempts(&state, &routing_stub, &auth).await?;
     attach_client_session_id(&mut attempts, extract_client_session_id(&headers), None);
     forward_json_attempts(
@@ -782,6 +783,7 @@ const URP_KNOWN_MESSAGES_FIELDS: [&str; 8] = [
 
 #[derive(Clone, Debug)]
 pub(crate) struct UrpRequest {
+    pub(crate) requested_service_tier: Option<String>,
     pub(crate) audio_output_format: Option<String>,
     pub(crate) model: String,
     pub(crate) max_multiplier: Option<Multiplier>,
@@ -803,6 +805,7 @@ struct MonoizeAttempt {
     logical_model: String,
     upstream_model: String,
     model_multiplier: Multiplier,
+    requested_service_tier: Option<String>,
     server_tool_usage_classes: Vec<String>,
     provider_transforms: Vec<TransformRuleConfig>,
     passive_failure_count_threshold: u32,
