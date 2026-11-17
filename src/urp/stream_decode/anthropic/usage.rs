@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 const KNOWN_USAGE_KEYS: &[&str] = &[
     "iterations",
+    "cache_write_tokens_details",
     "input_tokens",
     "prompt_tokens",
     "output_tokens",
@@ -32,6 +33,7 @@ const KNOWN_USAGE_KEYS: &[&str] = &[
 pub(super) struct AnthropicStreamUsageAccumulator {
     iterations: Option<Vec<UsageIteration>>,
     saw_usage: bool,
+    cache_write_tokens_details: Option<Value>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     cache_read_tokens: Option<u64>,
@@ -58,6 +60,15 @@ impl AnthropicStreamUsageAccumulator {
             })?
             .as_object()?;
         self.saw_usage = true;
+        if let Some(split) = usage
+            .get("cache_write_tokens_details")
+            .filter(|value| value.is_object())
+        {
+            merge_cumulative_value(
+                self.cache_write_tokens_details.get_or_insert(Value::Null),
+                split,
+            );
+        }
         if usage.contains_key("iterations") {
             self.iterations =
                 crate::urp::usage::decode_messages_iterations(usage.get("iterations"));
@@ -184,7 +195,19 @@ impl AnthropicStreamUsageAccumulator {
         let accepted_prediction_tokens = self.accepted_prediction_tokens.unwrap_or(0);
         let rejected_prediction_tokens = self.rejected_prediction_tokens.unwrap_or(0);
 
-        let input_details = (cache_read_tokens > 0
+        let split = crate::urp::CacheWriteTokensDetails::from_wire(
+            self.cache_write_tokens_details.as_ref(),
+        );
+        let cache_creation_tokens = split.as_ref().map_or(cache_creation_tokens, |split| {
+            cache_creation_tokens.max(
+                split
+                    .total()
+                    .saturating_add(cache_creation_5m_tokens)
+                    .saturating_add(cache_creation_1h_tokens),
+            )
+        });
+        let input_details = (split.is_some()
+            || cache_read_tokens > 0
             || cache_creation_tokens > 0
             || cache_creation_5m_tokens > 0
             || cache_creation_1h_tokens > 0
@@ -194,6 +217,7 @@ impl AnthropicStreamUsageAccumulator {
                 standard_tokens: 0,
                 cache_read_tokens,
                 cache_read_modality_breakdown: None,
+                cache_write_tokens_details: split,
                 cache_creation_tokens,
                 cache_creation_5m_tokens,
                 cache_creation_1h_tokens,

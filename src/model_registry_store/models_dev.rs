@@ -395,6 +395,8 @@ fn stringify_models_dev_cost(cost: &mut serde_json::Map<String, Value>) {
         "reasoning",
         "cache_read",
         "cache_write",
+        "cache_write_30m",
+        "cache_write_12h",
         "input_audio",
         "output_audio",
     ] {

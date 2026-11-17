@@ -67,6 +67,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261030_000058_drop_dead_settings::Migration),
             Box::new(m20261031_000059_channel_chat_dialect::Migration),
             Box::new(m20261101_000060_request_log_page_indexes::Migration),
+            Box::new(m20261118_000061_cache_write_prices::Migration),
         ]
     }
 }
@@ -263,3 +264,4 @@ mod m20261009_000057_system_one_channel_type;
 mod m20261030_000058_drop_dead_settings;
 mod m20261031_000059_channel_chat_dialect;
 mod m20261101_000060_request_log_page_indexes;
+mod m20261118_000061_cache_write_prices;

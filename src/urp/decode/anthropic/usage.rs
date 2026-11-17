@@ -34,6 +34,8 @@ struct AnthropicUsage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_creation: AnthropicCacheCreationUsage,
+    #[serde(default)]
+    cache_write_tokens_details: Option<Value>,
     #[serde(
         default,
         deserialize_with = "deserialize_u64ish_default",
@@ -96,7 +98,19 @@ impl From<AnthropicUsage> for Usage {
         }
         let reasoning_tokens = native_reasoning_tokens.unwrap_or(value.reasoning_tokens);
 
-        let input_details = (value.cache_read_input_tokens > 0
+        let split = crate::urp::CacheWriteTokensDetails::from_wire(
+            value.cache_write_tokens_details.as_ref(),
+        );
+        if let Some(split) = &split {
+            value.cache_creation_input_tokens = value.cache_creation_input_tokens.max(
+                split
+                    .total()
+                    .saturating_add(value.cache_creation.ephemeral_5m_input_tokens)
+                    .saturating_add(value.cache_creation.ephemeral_1h_input_tokens),
+            );
+        }
+        let input_details = (split.is_some()
+            || value.cache_read_input_tokens > 0
             || value.cache_creation_input_tokens > 0
             || value.tool_prompt_tokens > 0)
             .then_some(InputDetails {
@@ -104,6 +118,7 @@ impl From<AnthropicUsage> for Usage {
                 standard_tokens: 0,
                 cache_read_tokens: value.cache_read_input_tokens,
                 cache_read_modality_breakdown: None,
+                cache_write_tokens_details: split,
                 cache_creation_tokens: value.cache_creation_input_tokens,
                 cache_creation_5m_tokens: value.cache_creation.ephemeral_5m_input_tokens,
                 cache_creation_1h_tokens: value.cache_creation.ephemeral_1h_input_tokens,

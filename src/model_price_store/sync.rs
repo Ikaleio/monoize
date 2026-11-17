@@ -23,12 +23,12 @@ impl ModelPriceStore {
     }
 
     async fn bulk_upsert_synced_chunks(&self, rows: &[ModelPriceRecord]) -> Result<(), String> {
-        // 15 bound values per row; 60 rows keeps every statement below the
+        // 17 bound values per row; 58 rows keeps every statement below the
         // portable 999-parameter SQLite bound.
-        const CHUNK_SIZE: usize = 60;
+        const CHUNK_SIZE: usize = 58;
         let write_guard = self.db.write().await;
         for chunk in rows.chunks(CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 15);
+            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 17);
             let mut tuples = Vec::with_capacity(chunk.len());
             for record in chunk {
                 let start = values.len() + 1;
@@ -58,8 +58,10 @@ impl ModelPriceStore {
                     raw_json.into(),
                     SeaValue::Int(Some(if record.enabled { 1 } else { 0 })),
                     record.updated_at.to_rfc3339().into(),
+                    record.cache_write_30m_usd_per_1m.clone().into(),
+                    record.cache_write_12h_usd_per_1m.clone().into(),
                 ]);
-                let placeholders = (start..start + 15)
+                let placeholders = (start..start + 17)
                     .map(|index| format!("${index}"))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -79,6 +81,8 @@ impl ModelPriceStore {
                            cache_read_usd_per_1m=excluded.cache_read_usd_per_1m, \
                            cache_write_usd_per_1m=excluded.cache_write_usd_per_1m, \
                            cache_write_1h_usd_per_1m=excluded.cache_write_1h_usd_per_1m, \
+                           cache_write_30m_usd_per_1m=excluded.cache_write_30m_usd_per_1m, \
+                           cache_write_12h_usd_per_1m=excluded.cache_write_12h_usd_per_1m, \
                            reasoning_usd_per_1m=excluded.reasoning_usd_per_1m, \
                            per_request_usd=excluded.per_request_usd, \
                            billing_expr=excluded.billing_expr, \

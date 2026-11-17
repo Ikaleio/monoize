@@ -29,6 +29,8 @@ const BILLING_VALUE_TRANSLATION_KEYS: Record<
 		cache_write: 'requestLogs.billingUsageCacheWrite',
 		cache_write_5m: 'requestLogs.billingUsageCacheWrite5m',
 		cache_write_1h: 'requestLogs.billingUsageCacheWrite1h',
+		cache_write_30m: 'requestLogs.billingUsageCacheWrite30m',
+		cache_write_12h: 'requestLogs.billingUsageCacheWrite12h',
 		output: 'requestLogs.billingUsageOutput',
 		reasoning_output: 'requestLogs.billingUsageReasoningOutput',
 		per_request: 'requestLogs.billingUsagePerRequest',

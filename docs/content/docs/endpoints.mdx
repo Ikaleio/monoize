@@ -355,6 +355,7 @@ A marker from the same protocol family replays unchanged. A converted marker fol
 
 - It drops unknown members. It keeps `ttl` only when the target accepts that value, and Monoize never translates a TTL.
 - `cache_control` accepts `5m` and `1h`. Responses `prompt_cache_breakpoint` accepts `30m` and `12h`. `openai` Chat accepts `30m`.
+- OpenAI reports 30-minute and 12-hour cache writes separately in `cache_write_tokens_details`. Monoize preserves both counts across protocols and bills each count once.
 - Conversion toward Responses or `openai` Chat requires a GPT-5.6 or later model id. A deployment alias with another name receives no marker.
 - Responses and `openai` Chat receive no converted marker on assistant text, tool calls, or tool definitions. A marked system message becomes an input message.
 - A converted marker on a tool result moves to its last eligible part.

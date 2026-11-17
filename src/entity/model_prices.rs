@@ -21,6 +21,10 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub cache_write_1h_usd_per_1m: Option<String>,
     #[sea_orm(column_type = "Text")]
+    pub cache_write_30m_usd_per_1m: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub cache_write_12h_usd_per_1m: Option<String>,
+    #[sea_orm(column_type = "Text")]
     pub reasoning_usd_per_1m: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub per_request_usd: Option<String>,

@@ -17,8 +17,40 @@ pub struct ModalityBreakdown {
     pub document_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheWriteTokensDetails {
+    #[serde(
+        default,
+        deserialize_with = "crate::urp::decode::deserialize_u64ish_default"
+    )]
+    pub ttl_30m_tokens: u64,
+    #[serde(
+        default,
+        deserialize_with = "crate::urp::decode::deserialize_u64ish_default"
+    )]
+    pub ttl_12h_tokens: u64,
+    #[serde(flatten)]
+    pub extra_body: HashMap<String, Value>,
+}
+
+impl CacheWriteTokensDetails {
+    pub(crate) fn from_wire(value: Option<&Value>) -> Option<Self> {
+        let mut split = Self::deserialize(value.filter(|v| v.is_object())?).ok()?;
+        split
+            .extra_body
+            .retain(|key, _| !super::is_internal_key(key));
+        Some(split)
+    }
+
+    pub(crate) fn total(&self) -> u64 {
+        self.ttl_30m_tokens.saturating_add(self.ttl_12h_tokens)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InputDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens_details: Option<CacheWriteTokensDetails>,
     #[serde(default)]
     pub standard_tokens: u64,
     #[serde(default)]
@@ -107,6 +139,12 @@ impl Usage {
                     .input_details
                     .get_or_insert_with(InputDetails::default);
                 add!(target,source;standard_tokens,cache_read_tokens,cache_creation_tokens,cache_creation_5m_tokens,cache_creation_1h_tokens,tool_prompt_tokens);
+                if let Some(split) = &source.cache_write_tokens_details {
+                    let total = target
+                        .cache_write_tokens_details
+                        .get_or_insert_with(Default::default);
+                    add!(total,split;ttl_30m_tokens,ttl_12h_tokens);
+                }
                 add_modality(&mut target.modality_breakdown, &source.modality_breakdown);
                 add_modality(
                     &mut target.cache_read_modality_breakdown,

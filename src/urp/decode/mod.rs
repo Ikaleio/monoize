@@ -889,6 +889,57 @@ pub fn value_to_text(v: &Value) -> String {
     v.to_string()
 }
 
+fn normalize_openai_usage_details(obj: &mut Map<String, Value>) {
+    for (key, aliases) in [
+        ("prompt_tokens_details", INPUT_DETAIL_ALIASES),
+        ("input_tokens_details", INPUT_DETAIL_ALIASES),
+        ("completion_tokens_details", OUTPUT_DETAIL_ALIASES),
+        ("output_tokens_details", OUTPUT_DETAIL_ALIASES),
+    ] {
+        match obj.get_mut(key) {
+            Some(Value::Object(details)) => canonicalize_usage_detail_aliases(details, aliases),
+            Some(_) => {
+                obj.remove(key);
+            }
+            None => {}
+        }
+    }
+}
+
+const INPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
+    ("cache_read_tokens", "cached_tokens"),
+    ("tool_prompt_input_tokens", "tool_prompt_tokens"),
+];
+const OUTPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
+    (
+        "accepted_prediction_output_tokens",
+        "accepted_prediction_tokens",
+    ),
+    (
+        "rejected_prediction_output_tokens",
+        "rejected_prediction_tokens",
+    ),
+];
+
+/// PC9a: folds each alias into its canonical field. When both are present, the larger counter
+/// wins.
+fn canonicalize_usage_detail_aliases(details: &mut Map<String, Value>, aliases: &[(&str, &str)]) {
+    for (alias, canonical) in aliases {
+        let Some(alias_value) = details.remove(*alias) else {
+            continue;
+        };
+        let keep_alias = match details.get(*canonical) {
+            Some(existing) => {
+                value_to_u64(&alias_value).unwrap_or(0) > value_to_u64(existing).unwrap_or(0)
+            }
+            None => true,
+        };
+        if keep_alias {
+            details.insert((*canonical).to_string(), alias_value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod canonical_tool_definition_tests {
     use super::*;

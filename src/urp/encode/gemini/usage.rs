@@ -76,6 +76,10 @@ pub(super) fn encode_usage_metadata(usage: &Usage) -> Value {
             obj.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
+    obj.remove("cacheWriteTokensDetails");
+    if let Some(split) = &input.cache_write_tokens_details {
+        obj.insert("cacheWriteTokensDetails".into(), json!(split));
+    }
     Value::Object(obj)
 }
 

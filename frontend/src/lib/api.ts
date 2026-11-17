@@ -481,6 +481,8 @@ export interface BillingExprTier {
   cache_read_usd_per_1m?: string | null;
   cache_write_usd_per_1m?: string | null;
   cache_write_1h_usd_per_1m?: string | null;
+  cache_write_30m_usd_per_1m?: string | null;
+  cache_write_12h_usd_per_1m?: string | null;
   reasoning_usd_per_1m?: string | null;
 }
 
@@ -501,6 +503,8 @@ export interface ModelPriceRecord {
   cache_read_usd_per_1m: string | null;
   cache_write_usd_per_1m: string | null;
   cache_write_1h_usd_per_1m: string | null;
+  cache_write_30m_usd_per_1m: string | null;
+  cache_write_12h_usd_per_1m: string | null;
   reasoning_usd_per_1m: string | null;
   per_request_usd: string | null;
   billing_expr: BillingExpr | null;
@@ -518,6 +522,8 @@ export interface UpsertModelPriceInput {
   cache_read_usd_per_1m?: string | null;
   cache_write_usd_per_1m?: string | null;
   cache_write_1h_usd_per_1m?: string | null;
+  cache_write_30m_usd_per_1m?: string | null;
+  cache_write_12h_usd_per_1m?: string | null;
   reasoning_usd_per_1m?: string | null;
   per_request_usd?: string | null;
   billing_expr?: BillingExpr | null;

@@ -355,6 +355,7 @@ Monoize は、3 つのクライアントプロトコルすべてのリクエス�
 
 - 不明なメンバーを削除します。`ttl` は変換先が受け付ける場合だけ保持し、Monoize が TTL を換算することはありません。
 - `cache_control` は `5m` と `1h` を受け付けます。Responses の `prompt_cache_breakpoint` は `30m` と `12h` を受け付けます。`openai` Chat は `30m` を受け付けます。
+- OpenAI は `cache_write_tokens_details` で 30 分と 12 時間のキャッシュ書き込みを個別に返します。Monoize はプロトコル変換で両方のトークン数を保持し、それぞれに課金します。
 - Responses または `openai` Chat への変換には、GPT-5.6 以降のモデル id が必要です。別名のデプロイエイリアスにはマーカーを送りません。
 - Responses と `openai` Chat は、assistant テキスト、ツール呼び出し、ツール定義の変換済みマーカーを受け取りません。マーカー付きの system メッセージは入力メッセージになります。
 - ツール結果の変換済みマーカーは、その最後の対象パーツへ移ります。

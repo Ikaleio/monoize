@@ -338,7 +338,7 @@ pub(super) fn encode_response(
         .zip(answers)
         .map(|(question, answer)| encode_answer(question, answer))
         .collect();
-    serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "answers": answers,
         "usage": {
@@ -351,7 +351,12 @@ pub(super) fn encode_response(
             "output_tokens_details": { "reasoning_tokens": 0 },
             "total_tokens": usage.input_tokens + usage.output_tokens,
         },
-    })
+    });
+    if let Some(split) = &usage.cache_write_tokens_details {
+        body["usage"]["input_tokens_details"]["cache_write_tokens_details"] =
+            serde_json::json!(split);
+    }
+    body
 }
 
 fn encode_answer(question: &Question, answer: &Answer) -> Value {

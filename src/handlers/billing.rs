@@ -156,6 +156,8 @@ pub(super) fn build_usage_breakdown(usage: &urp::Usage) -> Value {
             "cache_creation_tokens": input_cache_creation,
             "cache_creation_5m_tokens": input_cache_creation_5m,
             "cache_creation_1h_tokens": input_cache_creation_1h,
+            "cache_creation_30m_tokens": input_details.and_then(|d| d.cache_write_tokens_details.as_ref()).map(|s| s.ttl_30m_tokens),
+            "cache_creation_12h_tokens": input_details.and_then(|d| d.cache_write_tokens_details.as_ref()).map(|s| s.ttl_12h_tokens),
             "audio_tokens": input_audio,
             "cached_audio_tokens": input_cached_audio,
             "image_tokens": input_image,

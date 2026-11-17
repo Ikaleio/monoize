@@ -66,6 +66,8 @@ struct ResolvedTokenPrices {
     cache_read: PriceField,
     cache_write: PriceField,
     cache_write_1h: PriceField,
+    cache_write_30m: PriceField,
+    cache_write_12h: PriceField,
     reasoning: PriceField,
 }
 
@@ -84,75 +86,46 @@ fn parse_price(raw: &str, column: &str) -> Result<PriceField, String> {
     })
 }
 
-fn resolve_price_chain(
-    input: &str,
-    output: Option<&str>,
-    cache_read: Option<&str>,
-    cache_write: Option<&str>,
-    cache_write_1h: Option<&str>,
-    reasoning: Option<&str>,
+fn resolve_price_chain<'a>(
+    price: impl Fn(&str) -> Option<&'a str>,
 ) -> Result<ResolvedTokenPrices, String> {
-    let input = parse_price(input, "input_usd_per_1m")?;
-    let output = match output {
-        Some(raw) => parse_price(raw, "output_usd_per_1m")?,
-        None => input.clone(),
+    let input = parse_price(
+        price("input_usd_per_1m").ok_or("missing input_usd_per_1m")?,
+        "input_usd_per_1m",
+    )?;
+    let resolve = |column, fallback: &PriceField| -> Result<PriceField, String> {
+        price(column).map_or_else(|| Ok(fallback.clone()), |raw| parse_price(raw, column))
     };
-    let cache_read = match cache_read {
-        Some(raw) => parse_price(raw, "cache_read_usd_per_1m")?,
-        None => input.clone(),
-    };
-    let cache_write = match cache_write {
-        Some(raw) => parse_price(raw, "cache_write_usd_per_1m")?,
-        None => input.clone(),
-    };
-    let cache_write_1h = match cache_write_1h {
-        Some(raw) => parse_price(raw, "cache_write_1h_usd_per_1m")?,
-        None => cache_write.clone(),
-    };
-    let reasoning = match reasoning {
-        Some(raw) => parse_price(raw, "reasoning_usd_per_1m")?,
-        None => output.clone(),
-    };
+    let output = resolve("output_usd_per_1m", &input)?;
+    let cache_write = resolve("cache_write_usd_per_1m", &input)?;
     Ok(ResolvedTokenPrices {
+        cache_read: resolve("cache_read_usd_per_1m", &input)?,
+        cache_write_1h: resolve("cache_write_1h_usd_per_1m", &cache_write)?,
+        cache_write_30m: resolve("cache_write_30m_usd_per_1m", &cache_write)?,
+        cache_write_12h: resolve("cache_write_12h_usd_per_1m", &cache_write)?,
+        reasoning: resolve("reasoning_usd_per_1m", &output)?,
         input,
         output,
-        cache_read,
         cache_write,
-        cache_write_1h,
-        reasoning,
     })
 }
 
 fn resolve_row_prices(price: &ModelPriceRecord) -> Result<ResolvedTokenPrices, String> {
-    let input = price
-        .input_usd_per_1m
-        .as_deref()
-        .ok_or_else(|| "per_token row without input_usd_per_1m".to_string())?;
-    resolve_price_chain(
-        input,
-        price.output_usd_per_1m.as_deref(),
-        price.cache_read_usd_per_1m.as_deref(),
-        price.cache_write_usd_per_1m.as_deref(),
-        price.cache_write_1h_usd_per_1m.as_deref(),
-        price.reasoning_usd_per_1m.as_deref(),
-    )
-}
-
-fn tier_price<'a>(tier: &'a Map<String, Value>, field: &str) -> Option<&'a str> {
-    tier.get(field).and_then(Value::as_str)
+    resolve_price_chain(|field| match field {
+        "input_usd_per_1m" => price.input_usd_per_1m.as_deref(),
+        "output_usd_per_1m" => price.output_usd_per_1m.as_deref(),
+        "cache_read_usd_per_1m" => price.cache_read_usd_per_1m.as_deref(),
+        "cache_write_usd_per_1m" => price.cache_write_usd_per_1m.as_deref(),
+        "cache_write_1h_usd_per_1m" => price.cache_write_1h_usd_per_1m.as_deref(),
+        "cache_write_30m_usd_per_1m" => price.cache_write_30m_usd_per_1m.as_deref(),
+        "cache_write_12h_usd_per_1m" => price.cache_write_12h_usd_per_1m.as_deref(),
+        "reasoning_usd_per_1m" => price.reasoning_usd_per_1m.as_deref(),
+        _ => None,
+    })
 }
 
 fn resolve_tier_prices(tier: &Map<String, Value>) -> Result<ResolvedTokenPrices, String> {
-    let input = tier_price(tier, "input_usd_per_1m")
-        .ok_or_else(|| "tier without input_usd_per_1m".to_string())?;
-    resolve_price_chain(
-        input,
-        tier_price(tier, "output_usd_per_1m"),
-        tier_price(tier, "cache_read_usd_per_1m"),
-        tier_price(tier, "cache_write_usd_per_1m"),
-        tier_price(tier, "cache_write_1h_usd_per_1m"),
-        tier_price(tier, "reasoning_usd_per_1m"),
-    )
+    resolve_price_chain(|field| tier.get(field).and_then(Value::as_str))
 }
 
 fn canonical_service_tier_key(raw: &str) -> Option<String> {
@@ -224,6 +197,8 @@ struct TokenQuantities {
     /// `cache_w_5m` plus any unsplit aggregate remainder (MP-C2).
     cache_write: u64,
     cache_write_1h: u64,
+    cache_write_30m: u64,
+    cache_write_12h: u64,
     output_plain: u64,
     reasoning: u64,
 }
@@ -235,7 +210,14 @@ fn token_quantities(usage: &urp::Usage) -> TokenQuantities {
     let cache_w_5m = details.map(|d| d.cache_creation_5m_tokens).unwrap_or(0);
     let cache_w_1h = details.map(|d| d.cache_creation_1h_tokens).unwrap_or(0);
     let cache_w_agg = details.map(|d| d.cache_creation_tokens).unwrap_or(0);
-    let unsplit = cache_w_agg.saturating_sub(cache_w_5m.saturating_add(cache_w_1h));
+    let split = details.and_then(|d| d.cache_write_tokens_details.as_ref());
+    let cache_write_30m = split.map_or(0, |s| s.ttl_30m_tokens);
+    let cache_write_12h = split.map_or(0, |s| s.ttl_12h_tokens);
+    let unsplit = cache_w_agg
+        .saturating_sub(cache_w_5m)
+        .saturating_sub(cache_w_1h)
+        .saturating_sub(cache_write_30m)
+        .saturating_sub(cache_write_12h);
     let input_uncached = usage
         .input_tokens
         .saturating_sub(cache_read)
@@ -251,6 +233,8 @@ fn token_quantities(usage: &urp::Usage) -> TokenQuantities {
         cache_read,
         cache_write: cache_w_5m.saturating_add(unsplit),
         cache_write_1h: cache_w_1h,
+        cache_write_30m,
+        cache_write_12h,
         output_plain,
         reasoning,
     }
@@ -322,6 +306,20 @@ fn per_token_lines(
         "cache_write_1h",
         quantities.cache_write_1h,
         &prices.cache_write_1h,
+    )?;
+    push_token_line(
+        &mut line_items,
+        &mut total,
+        "cache_write_30m",
+        quantities.cache_write_30m,
+        &prices.cache_write_30m,
+    )?;
+    push_token_line(
+        &mut line_items,
+        &mut total,
+        "cache_write_12h",
+        quantities.cache_write_12h,
+        &prices.cache_write_12h,
     )?;
     push_token_line(
         &mut line_items,

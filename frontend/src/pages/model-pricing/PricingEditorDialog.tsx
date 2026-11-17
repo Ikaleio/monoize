@@ -52,6 +52,8 @@ interface TierRow {
   cacheRead: string;
   cacheWrite: string;
   cacheWrite1h: string;
+  cacheWrite30m: string;
+  cacheWrite12h: string;
   reasoning: string;
 }
 
@@ -83,6 +85,8 @@ function emptyTier(): TierRow {
     cacheRead: "",
     cacheWrite: "",
     cacheWrite1h: "",
+    cacheWrite30m: "",
+    cacheWrite12h: "",
     reasoning: "",
   };
 }
@@ -98,6 +102,8 @@ function tierFromExpr(tier: BillingExprTier): TierRow {
     cacheRead: tier.cache_read_usd_per_1m ?? "",
     cacheWrite: tier.cache_write_usd_per_1m ?? "",
     cacheWrite1h: tier.cache_write_1h_usd_per_1m ?? "",
+    cacheWrite30m: tier.cache_write_30m_usd_per_1m ?? "",
+    cacheWrite12h: tier.cache_write_12h_usd_per_1m ?? "",
     reasoning: tier.reasoning_usd_per_1m ?? "",
   };
 }
@@ -126,6 +132,8 @@ function rowsToExprTiers(tiers: TierRow[]): BillingExprTier[] {
     cache_read_usd_per_1m: tier.cacheRead.trim() || null,
     cache_write_usd_per_1m: tier.cacheWrite.trim() || null,
     cache_write_1h_usd_per_1m: tier.cacheWrite1h.trim() || null,
+    cache_write_30m_usd_per_1m: tier.cacheWrite30m.trim() || null,
+    cache_write_12h_usd_per_1m: tier.cacheWrite12h.trim() || null,
     reasoning_usd_per_1m: tier.reasoning.trim() || null,
   }));
 }
@@ -215,6 +223,8 @@ const PRICE_FIELD_LABEL_KEYS: Record<PerTokenPriceField, string> = {
   cache_read_usd_per_1m: "modelPricing.fieldCacheRead",
   cache_write_usd_per_1m: "modelPricing.fieldCacheWrite",
   cache_write_1h_usd_per_1m: "modelPricing.fieldCacheWrite1h",
+  cache_write_30m_usd_per_1m: "modelPricing.fieldCacheWrite30m",
+  cache_write_12h_usd_per_1m: "modelPricing.fieldCacheWrite12h",
   reasoning_usd_per_1m: "modelPricing.fieldReasoning",
 };
 
@@ -224,6 +234,8 @@ const TIER_PRICE_FIELDS = [
   ["cacheRead", "modelPricing.fieldCacheRead"],
   ["cacheWrite", "modelPricing.fieldCacheWrite"],
   ["cacheWrite1h", "modelPricing.fieldCacheWrite1h"],
+  ["cacheWrite30m", "modelPricing.fieldCacheWrite30m"],
+  ["cacheWrite12h", "modelPricing.fieldCacheWrite12h"],
   ["reasoning", "modelPricing.fieldReasoning"],
 ] as const satisfies ReadonlyArray<readonly [keyof TierRow, string]>;
 

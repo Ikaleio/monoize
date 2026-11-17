@@ -30,6 +30,8 @@ struct OpenAiChatInputDetails {
     cached_tokens: u64,
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     cache_write_tokens: u64,
+    #[serde(default)]
+    cache_write_tokens_details: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     cache_creation_tokens: u64,
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
@@ -58,9 +60,12 @@ fn detail_extra_object(extra: &HashMap<String, Value>) -> Map<String, Value> {
 }
 
 fn input_details(details: &OpenAiChatInputDetails) -> Option<InputDetails> {
+    let split =
+        crate::urp::CacheWriteTokensDetails::from_wire(details.cache_write_tokens_details.as_ref());
     let cache_creation_tokens = details
         .cache_creation_tokens
-        .max(details.cache_write_tokens);
+        .max(details.cache_write_tokens)
+        .max(split.as_ref().map_or(0, |s| s.total()));
     let extra = detail_extra_object(&details.extra);
     let modality_breakdown =
         crate::handlers::usage::parse_modality_breakdown_from_detail_object(Some(&extra));
@@ -69,6 +74,7 @@ fn input_details(details: &OpenAiChatInputDetails) -> Option<InputDetails> {
             &extra,
         ));
     let reported = details.cached_tokens > 0
+        || split.is_some()
         || cache_creation_tokens > 0
         || details.tool_prompt_tokens > 0
         || modality_breakdown.is_some()
@@ -79,6 +85,7 @@ fn input_details(details: &OpenAiChatInputDetails) -> Option<InputDetails> {
         cache_read_tokens: details.cached_tokens,
         cache_read_modality_breakdown,
         cache_creation_tokens,
+        cache_write_tokens_details: split,
         cache_creation_5m_tokens: 0,
         cache_creation_1h_tokens: 0,
         tool_prompt_tokens: details.tool_prompt_tokens,
@@ -198,20 +205,7 @@ pub(crate) fn parse_chat_usage(obj: &Map<String, Value>) -> Usage {
             obj.insert(canonical.to_string(), value);
         }
     }
-    for (key, aliases) in [
-        ("prompt_tokens_details", INPUT_DETAIL_ALIASES),
-        ("input_tokens_details", INPUT_DETAIL_ALIASES),
-        ("completion_tokens_details", OUTPUT_DETAIL_ALIASES),
-        ("output_tokens_details", OUTPUT_DETAIL_ALIASES),
-    ] {
-        match obj.get_mut(key) {
-            Some(Value::Object(details)) => canonicalize_usage_detail_aliases(details, aliases),
-            Some(_) => {
-                obj.remove(key);
-            }
-            None => {}
-        }
-    }
+    super::super::normalize_openai_usage_details(&mut obj);
     serde_json::from_value::<OpenAiChatUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
@@ -225,38 +219,4 @@ pub(crate) fn parse_chat_usage(obj: &Map<String, Value>) -> Usage {
             output_details: None,
             extra_body: split_extra(&obj, &[]),
         })
-}
-
-const INPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
-    ("cache_read_tokens", "cached_tokens"),
-    ("tool_prompt_input_tokens", "tool_prompt_tokens"),
-];
-const OUTPUT_DETAIL_ALIASES: &[(&str, &str)] = &[
-    (
-        "accepted_prediction_output_tokens",
-        "accepted_prediction_tokens",
-    ),
-    (
-        "rejected_prediction_output_tokens",
-        "rejected_prediction_tokens",
-    ),
-];
-
-/// PC9a: folds each alias into its canonical field. When both are present, the larger counter
-/// wins.
-fn canonicalize_usage_detail_aliases(details: &mut Map<String, Value>, aliases: &[(&str, &str)]) {
-    for (alias, canonical) in aliases {
-        let Some(alias_value) = details.remove(*alias) else {
-            continue;
-        };
-        let keep_alias = match details.get(*canonical) {
-            Some(existing) => {
-                value_to_u64(&alias_value).unwrap_or(0) > value_to_u64(existing).unwrap_or(0)
-            }
-            None => true,
-        };
-        if keep_alias {
-            details.insert((*canonical).to_string(), alias_value);
-        }
-    }
 }

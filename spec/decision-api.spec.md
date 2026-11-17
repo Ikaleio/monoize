@@ -176,6 +176,8 @@ DR-B24. `Score` encodes to `type = "score"` and `levels`. Each level becomes `{ 
 
 ## 7. Response handling
 
+DR-S1a. Billing and converted OpenAI decision responses MUST preserve the optional OpenAI cache-write split according to PC9b of the unified proxy specification.
+
 DR-S1. Monoize MUST parse billing usage from the raw upstream response before conversion. `usage.input_tokens` and `usage.output_tokens` are required. `usage.input_tokens_details.cached_tokens` and `usage.input_tokens_details.cache_write_tokens` are optional cache counts.
 
 DR-S2. Missing usage MUST follow the missing-usage rules of `model-pricing.spec.md` (MP-F3), exactly as for `POST /v1/embeddings`.

@@ -14,6 +14,14 @@ impl SyncPlan {
                 ("output_usd_per_1m", &candidate.output_usd_per_1m),
                 ("cache_read_usd_per_1m", &candidate.cache_read_usd_per_1m),
                 ("cache_write_usd_per_1m", &candidate.cache_write_usd_per_1m),
+                (
+                    "cache_write_30m_usd_per_1m",
+                    &candidate.cache_write_30m_usd_per_1m,
+                ),
+                (
+                    "cache_write_12h_usd_per_1m",
+                    &candidate.cache_write_12h_usd_per_1m,
+                ),
                 ("reasoning_usd_per_1m", &candidate.reasoning_usd_per_1m),
                 ("per_request_usd", &candidate.per_request_usd),
             ],
@@ -35,6 +43,8 @@ impl SyncPlan {
             cache_read_usd_per_1m: candidate.cache_read_usd_per_1m,
             cache_write_usd_per_1m: candidate.cache_write_usd_per_1m,
             cache_write_1h_usd_per_1m: None,
+            cache_write_30m_usd_per_1m: candidate.cache_write_30m_usd_per_1m,
+            cache_write_12h_usd_per_1m: candidate.cache_write_12h_usd_per_1m,
             reasoning_usd_per_1m: candidate.reasoning_usd_per_1m,
             per_request_usd: candidate.per_request_usd,
             billing_expr: candidate.billing_expr,
@@ -96,6 +106,20 @@ impl SyncPlan {
                 locked,
                 &stored.cache_write_usd_per_1m,
                 &candidate.cache_write_usd_per_1m,
+                &mut changed,
+            ),
+            cache_write_30m_usd_per_1m: merge_field(
+                "cache_write_30m_usd_per_1m",
+                locked,
+                &stored.cache_write_30m_usd_per_1m,
+                &candidate.cache_write_30m_usd_per_1m,
+                &mut changed,
+            ),
+            cache_write_12h_usd_per_1m: merge_field(
+                "cache_write_12h_usd_per_1m",
+                locked,
+                &stored.cache_write_12h_usd_per_1m,
+                &candidate.cache_write_12h_usd_per_1m,
                 &mut changed,
             ),
             // No sync source publishes a 1h cache-write price; the
@@ -181,7 +205,7 @@ fn merge_field<T: Clone + PartialEq + Serialize>(
 /// Price columns shown for an inserted or deleted row in the MP-A6 preview.
 fn row_price_values(
     billing_mode: &str,
-    prices: [(&str, &Option<String>); 6],
+    prices: [(&str, &Option<String>); 8],
     billing_expr: &Option<Value>,
 ) -> serde_json::Map<String, Value> {
     let mut values = serde_json::Map::new();
@@ -256,6 +280,14 @@ pub fn compute_sync_plan(
                             ("output_usd_per_1m", &row.output_usd_per_1m),
                             ("cache_read_usd_per_1m", &row.cache_read_usd_per_1m),
                             ("cache_write_usd_per_1m", &row.cache_write_usd_per_1m),
+                            (
+                                "cache_write_30m_usd_per_1m",
+                                &row.cache_write_30m_usd_per_1m,
+                            ),
+                            (
+                                "cache_write_12h_usd_per_1m",
+                                &row.cache_write_12h_usd_per_1m,
+                            ),
                             ("reasoning_usd_per_1m", &row.reasoning_usd_per_1m),
                             ("per_request_usd", &row.per_request_usd),
                         ],

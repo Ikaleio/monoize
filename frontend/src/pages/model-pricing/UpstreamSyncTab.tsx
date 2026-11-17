@@ -93,6 +93,8 @@ const FIELD_LABEL_KEYS: Record<string, string> = {
   cache_read_usd_per_1m: "modelPricing.fieldCacheRead",
   cache_write_usd_per_1m: "modelPricing.fieldCacheWrite",
   cache_write_1h_usd_per_1m: "modelPricing.fieldCacheWrite1h",
+  cache_write_30m_usd_per_1m: "modelPricing.fieldCacheWrite30m",
+  cache_write_12h_usd_per_1m: "modelPricing.fieldCacheWrite12h",
   reasoning_usd_per_1m: "modelPricing.fieldReasoning",
   per_request_usd: "modelPricing.modePerRequest",
   billing_expr: "modelPricing.modeTiered",

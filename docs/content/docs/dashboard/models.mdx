@@ -63,6 +63,8 @@ A preview stays valid for 10 minutes. If it expired, or if prices changed after 
 
 Models.dev sync writes context-window price steps and Fast mode prices into `billing_expr`.
 
+If the OpenAI write rate equals 1.25 times input, sync fills missing TTL prices. The 30-minute and 12-hour rates equal 1.25 and 2.5 times input, respectively.
+
 Sync does not change a locked field. Sync does not delete rows that you created manually.
 
 Automatic sync is enabled by default. Monoize starts one cycle at process startup and

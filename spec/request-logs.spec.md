@@ -220,6 +220,8 @@ RL15. For successful requests where usage exists, `usage_breakdown_json` MUST pe
 
 RL15b. If normalized usage contains an authoritative cached-input modality split, `usage_breakdown_json.input` SHOULD include the corresponding `cached_text_tokens`, `cached_image_tokens`, `cached_audio_tokens`, `cached_video_tokens`, or `cached_document_tokens` fields when present.
 
+RL15b. Store the upstream 30-minute and 12-hour counts in `usage_breakdown_json.input.cache_creation_30m_tokens` and `cache_creation_12h_tokens`. Store null when the upstream omits the split.
+
 RL15a. `usage_breakdown_json.input.total_tokens` MUST be the aggregate/inclusive prompt token total as defined in `user-billing-and-model-metadata.spec.md` § 5 C3 — i.e. it MUST include cache-read tokens and cache-creation tokens. `usage_breakdown_json.input.uncached_tokens` MUST equal `input.total_tokens - cached_tokens - cache_creation_tokens` clamped at zero (the base-rate billable bucket). These fields MUST be computed uniformly across all upstream provider types, because upstream usage is normalized at decode time per C3-ii of the billing spec. Provider-type branching in usage-breakdown construction MUST NOT exist.
 
 RL16. For successful requests where billing is executed, `billing_breakdown_json` MUST persist the version-3 settlement snapshot defined by `model-pricing.spec.md` §8 (MP-B1). New settlements MUST NOT write any other version.

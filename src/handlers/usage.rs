@@ -339,23 +339,6 @@ pub(crate) async fn record_stream_terminal_error(
     guard.terminal.terminal_error = Some(error);
 }
 
-fn split_usage_extra(usage: &Map<String, Value>, known_keys: &[&str]) -> HashMap<String, Value> {
-    usage
-        .iter()
-        .filter_map(|(k, v)| {
-            if known_keys.contains(&k.as_str()) || urp::is_internal_key(k) {
-                None
-            } else {
-                let mut value = v.clone();
-                if let Some(object) = value.as_object_mut() {
-                    object.retain(|key, _| !urp::is_internal_key(key));
-                }
-                Some((k.clone(), value))
-            }
-        })
-        .collect()
-}
-
 pub(crate) fn parse_modality_breakdown_from_detail_object(
     detail: Option<&Map<String, Value>>,
 ) -> Option<urp::ModalityBreakdown> {
@@ -438,62 +421,6 @@ pub(crate) fn parse_cache_read_modality_breakdown_from_detail_object(
     }
 }
 
-fn make_input_details(
-    standard_tokens: u64,
-    cache_read_tokens: u64,
-    cache_read_modality_breakdown: Option<urp::ModalityBreakdown>,
-    cache_creation_tokens: u64,
-    tool_prompt_tokens: u64,
-    modality_breakdown: Option<urp::ModalityBreakdown>,
-) -> Option<urp::InputDetails> {
-    if standard_tokens > 0
-        || cache_read_tokens > 0
-        || cache_read_modality_breakdown.is_some()
-        || cache_creation_tokens > 0
-        || tool_prompt_tokens > 0
-        || modality_breakdown.is_some()
-    {
-        Some(urp::InputDetails {
-            tool_prompt_modality_breakdown: None,
-            standard_tokens,
-            cache_read_tokens,
-            cache_read_modality_breakdown,
-            cache_creation_tokens,
-            cache_creation_5m_tokens: 0,
-            cache_creation_1h_tokens: 0,
-            tool_prompt_tokens,
-            modality_breakdown,
-        })
-    } else {
-        None
-    }
-}
-
-fn make_output_details(
-    standard_tokens: u64,
-    reasoning_tokens: u64,
-    accepted_prediction_tokens: u64,
-    rejected_prediction_tokens: u64,
-    modality_breakdown: Option<urp::ModalityBreakdown>,
-) -> Option<urp::OutputDetails> {
-    if standard_tokens > 0
-        || reasoning_tokens > 0
-        || accepted_prediction_tokens > 0
-        || rejected_prediction_tokens > 0
-        || modality_breakdown.is_some()
-    {
-        Some(urp::OutputDetails {
-            standard_tokens,
-            reasoning_tokens,
-            accepted_prediction_tokens,
-            rejected_prediction_tokens,
-            modality_breakdown,
-        })
-    } else {
-        None
-    }
-}
-
 /// PC9a: stream chunks share the non-stream Chat usage parser.
 pub(crate) fn parse_usage_from_chat_object(obj: &Value) -> Option<urp::Usage> {
     let usage = obj.get("usage")?.as_object()?;
@@ -512,112 +439,18 @@ pub(crate) fn parse_usage_from_responses_object(obj: &Value) -> Option<urp::Usag
     let usage = obj
         .get("usage")
         .or_else(|| obj.get("response").and_then(|v| v.get("usage")))?;
-    let input_tokens = usage
+    let usage = usage.as_object()?;
+    usage
         .get("input_tokens")
         .or_else(|| usage.get("prompt_tokens"))
-        .and_then(|v| v.as_u64())?;
-    let output_tokens = usage
+        .and_then(urp::decode::value_to_u64)?;
+    usage
         .get("output_tokens")
         .or_else(|| usage.get("completion_tokens"))
-        .and_then(|v| v.as_u64())?;
-    let input_details_obj = usage
-        .get("input_tokens_details")
-        .or_else(|| usage.get("prompt_tokens_details"))
-        .and_then(|v| v.as_object());
-    let output_details_obj = usage
-        .get("output_tokens_details")
-        .or_else(|| usage.get("completion_tokens_details"))
-        .and_then(|v| v.as_object());
-    let cached_tokens = usage
-        .get("input_tokens_details")
-        .and_then(|v| v.get("cached_tokens"))
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|v| v.get("cached_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let reasoning_tokens = usage
-        .get("output_tokens_details")
-        .and_then(|v| v.get("reasoning_tokens"))
-        .or_else(|| {
-            usage
-                .get("completion_tokens_details")
-                .and_then(|v| v.get("reasoning_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_creation_tokens = usage
-        .get("input_tokens_details")
-        .and_then(|v| v.get("cache_creation_tokens"))
-        .or_else(|| {
-            usage
-                .get("input_tokens_details")
-                .and_then(|v| v.get("cache_write_tokens"))
-        })
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|v| v.get("cache_creation_tokens"))
-        })
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|v| v.get("cache_write_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let tool_prompt_tokens = usage
-        .get("input_tokens_details")
-        .and_then(|v| v.get("tool_prompt_tokens"))
-        .or_else(|| {
-            usage
-                .get("prompt_tokens_details")
-                .and_then(|v| v.get("tool_prompt_tokens"))
-        })
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let accepted_prediction_tokens = usage
-        .get("output_tokens_details")
-        .and_then(|v| v.get("accepted_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let rejected_prediction_tokens = usage
-        .get("output_tokens_details")
-        .and_then(|v| v.get("rejected_prediction_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let extra_body = split_usage_extra(
-        usage.as_object()?,
-        &[
-            "input_tokens",
-            "output_tokens",
-            "prompt_tokens",
-            "completion_tokens",
-        ],
-    );
-    Some(urp::Usage {
-        iterations: None,
-        input_tokens,
-        output_tokens,
-        input_details: make_input_details(
-            0,
-            cached_tokens,
-            parse_cache_read_modality_breakdown_from_detail_object(input_details_obj),
-            cache_creation_tokens,
-            tool_prompt_tokens,
-            parse_modality_breakdown_from_detail_object(input_details_obj),
-        ),
-        output_details: make_output_details(
-            0,
-            reasoning_tokens,
-            accepted_prediction_tokens,
-            rejected_prediction_tokens,
-            parse_modality_breakdown_from_detail_object(output_details_obj),
-        ),
-        extra_body,
-    })
+        .and_then(urp::decode::value_to_u64)?;
+    Some(urp::decode::openai_responses::parse_usage_from_responses(
+        usage,
+    ))
 }
 
 /// Metering uses the same parser as response decoding so both agree on every counter.

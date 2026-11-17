@@ -51,6 +51,8 @@ export const PER_TOKEN_PRICE_FIELDS = [
   "cache_read_usd_per_1m",
   "cache_write_usd_per_1m",
   "cache_write_1h_usd_per_1m",
+  "cache_write_30m_usd_per_1m",
+  "cache_write_12h_usd_per_1m",
   "reasoning_usd_per_1m",
 ] as const;
 

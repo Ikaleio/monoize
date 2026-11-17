@@ -179,12 +179,13 @@ pub enum Answer {
 }
 
 /// Token counts reported by a decision upstream (DR-S1).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DecisionUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
     pub cache_write_tokens: u64,
+    pub cache_write_tokens_details: Option<crate::urp::CacheWriteTokensDetails>,
 }
 
 impl DecisionUsage {
@@ -193,13 +194,18 @@ impl DecisionUsage {
         let usage = body.get("usage");
         let count = |value: Option<&Value>| value.and_then(Value::as_u64).unwrap_or(0);
         let details = usage.and_then(|usage| usage.get("input_tokens_details"));
+        let split = crate::urp::CacheWriteTokensDetails::from_wire(
+            details.and_then(|d| d.get("cache_write_tokens_details")),
+        );
         Self {
             input_tokens: count(usage.and_then(|usage| usage.get("input_tokens"))),
             output_tokens: count(usage.and_then(|usage| usage.get("output_tokens"))),
             cached_tokens: count(details.and_then(|details| details.get("cached_tokens"))),
             cache_write_tokens: count(
                 details.and_then(|details| details.get("cache_write_tokens")),
-            ),
+            )
+            .max(split.as_ref().map_or(0, |s| s.total())),
+            cache_write_tokens_details: split,
         }
     }
 }

@@ -79,6 +79,10 @@ pub(crate) fn anthropic_native_usage_json(usage: &Usage) -> Value {
     );
     usage_object.insert("cache_creation".to_string(), Value::Object(cache_creation));
 
+    usage_object.remove("cache_write_tokens_details");
+    if let Some(split) = &input_details.cache_write_tokens_details {
+        usage_object.insert("cache_write_tokens_details".into(), json!(split));
+    }
     usage_object.remove("iterations");
     if let Some(iterations) = &usage.iterations {
         usage_object.insert(

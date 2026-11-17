@@ -83,6 +83,8 @@ pub struct SyncCandidate {
     pub output_usd_per_1m: Option<String>,
     pub cache_read_usd_per_1m: Option<String>,
     pub cache_write_usd_per_1m: Option<String>,
+    pub cache_write_30m_usd_per_1m: Option<String>,
+    pub cache_write_12h_usd_per_1m: Option<String>,
     pub reasoning_usd_per_1m: Option<String>,
     pub per_request_usd: Option<String>,
     pub billing_expr: Option<Value>,

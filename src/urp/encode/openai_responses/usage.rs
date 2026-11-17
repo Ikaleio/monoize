@@ -50,6 +50,11 @@ pub(crate) fn encode_usage(usage: &Usage) -> Value {
         }
     }
     merge_usage_extra(&mut usage_value, &usage.extra_body);
+    if let Some(split) = &input_details.cache_write_tokens_details {
+        usage_value["input_tokens_details"]["cache_write_tokens_details"] = json!(split);
+    } else if let Some(detail) = usage_value["input_tokens_details"].as_object_mut() {
+        detail.remove("cache_write_tokens_details");
+    }
     usage_value
 }
 

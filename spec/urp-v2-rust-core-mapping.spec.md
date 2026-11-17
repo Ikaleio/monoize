@@ -85,12 +85,13 @@ InputDetails {
   cache_creation_tokens: u64,
   cache_creation_5m_tokens: u64,
   cache_creation_1h_tokens: u64,
+  cache_write_tokens_details: Option<CacheWriteTokensDetails>,
   tool_prompt_tokens: u64,
   modality_breakdown: Option<ModalityBreakdown>
 }
 ```
 
-RTYPE-4J. `cache_creation_tokens` is the aggregate cache-write count. `cache_creation_5m_tokens` and `cache_creation_1h_tokens` are authoritative split counters when an upstream provider supplies them. The Rust core MUST NOT derive a 5-minute or 1-hour split from the aggregate field.
+RTYPE-4J. `cache_creation_tokens` is the aggregate cache-write count. `cache_creation_5m_tokens` and `cache_creation_1h_tokens` are authoritative split counters when an upstream provider supplies them. The optional OpenAI split contains unsigned `ttl_30m_tokens` and `ttl_12h_tokens`. Preserve explicit zeros and unknown siblings. When an OpenAI split is present, the normalized aggregate MUST be at least the saturating sum of all reported TTL counters. Add each counter across iterations. The Rust core MUST NOT derive a 5-minute or 1-hour split from the aggregate field.
 
 RTYPE-4K. `cache_read_modality_breakdown` is the authoritative modality split for `cache_read_tokens` when an upstream provider supplies it. The Rust core MUST NOT derive this split from aggregate `cache_read_tokens` or from total input modality counts.
 

@@ -67,6 +67,8 @@ MP-D1. Table `model_prices` MUST contain these columns:
 | `output_usd_per_1m` | TEXT NULL | USD per 1M output tokens |
 | `cache_read_usd_per_1m` | TEXT NULL | USD per 1M cache-read input tokens |
 | `cache_write_usd_per_1m` | TEXT NULL | USD per 1M cache-write (5m or unsplit) tokens |
+| `cache_write_30m_usd_per_1m` | TEXT NULL | USD per 1M 30-minute cache-write tokens |
+| `cache_write_12h_usd_per_1m` | TEXT NULL | USD per 1M 12-hour cache-write tokens |
 | `cache_write_1h_usd_per_1m` | TEXT NULL | USD per 1M 1-hour cache-write tokens |
 | `reasoning_usd_per_1m` | TEXT NULL | USD per 1M reasoning output tokens |
 | `per_request_usd` | TEXT NULL | USD per request (`per_request` mode) |
@@ -85,7 +87,7 @@ other value MUST be rejected at write time.
 
 MP-D4. `locked_fields` MUST decode as a JSON array of strings. Each element MUST be one
 of: `billing_mode`, `input_usd_per_1m`, `output_usd_per_1m`, `cache_read_usd_per_1m`,
-`cache_write_usd_per_1m`, `cache_write_1h_usd_per_1m`, `reasoning_usd_per_1m`,
+`cache_write_usd_per_1m`, `cache_write_1h_usd_per_1m`, `cache_write_30m_usd_per_1m`, `cache_write_12h_usd_per_1m`, `reasoning_usd_per_1m`,
 `per_request_usd`, `billing_expr`, `enabled`. A write path MUST reject other elements.
 
 MP-D5. `raw_json` MUST be a JSON object string. A malformed persisted value MUST fail
@@ -177,6 +179,7 @@ MP-R5. Null price columns resolve through these fallbacks at computation time:
 - `output_usd_per_1m` null → use `input_usd_per_1m`.
 - `cache_read_usd_per_1m` null → use `input_usd_per_1m`.
 - `cache_write_usd_per_1m` null → use `input_usd_per_1m`.
+- A null 30-minute or 12-hour price falls back to the resolved generic cache-write price. This applies to rows and expression tiers.
 - `cache_write_1h_usd_per_1m` null → use the resolved `cache_write_usd_per_1m`.
 - `reasoning_usd_per_1m` null → use the resolved `output_usd_per_1m`.
 
@@ -221,14 +224,16 @@ MP-C1. Token quantities MUST be read from normalized upstream `Usage` as defined
 cache_read   = usage.input_details.cache_read_tokens          (default 0)
 cache_w_5m   = usage.input_details.cache_creation_5m_tokens   (default 0)
 cache_w_1h   = usage.input_details.cache_creation_1h_tokens   (default 0)
+cache_w_30m  = usage.input_details.cache_write_tokens_details.ttl_30m_tokens (default 0)
+cache_w_12h  = usage.input_details.cache_write_tokens_details.ttl_12h_tokens (default 0)
 cache_w_agg  = usage.input_details.cache_creation_tokens      (default 0)
 input_uncached = max(0, input_tokens - cache_read - cache_w_agg)
 reasoning    = usage.output_details.reasoning_tokens          (default 0)
 output_plain = max(0, output_tokens - reasoning)
 ```
 
-MP-C2. When `cache_w_agg > cache_w_5m + cache_w_1h`, the unsplit remainder
-`cache_w_agg - cache_w_5m - cache_w_1h` MUST be charged at the resolved
+MP-C2. When `cache_w_agg > cache_w_5m + cache_w_1h + cache_w_30m + cache_w_12h`, the unsplit remainder
+`cache_w_agg - cache_w_5m - cache_w_1h - cache_w_30m - cache_w_12h` MUST be charged at the resolved
 `cache_write_usd_per_1m` rate. Splitting an unsplit aggregate between TTL buckets MUST
 NOT occur.
 
@@ -241,6 +246,8 @@ token_charge_nano =
     trunc(input_uncached * input_usd_per_1m * 1000)
   + trunc(cache_read     * resolved(cache_read_usd_per_1m)     * 1000)
   + trunc(cache_w_5m_or_unsplit * resolved(cache_write_usd_per_1m) * 1000)
+  + trunc(cache_w_30m    * resolved(cache_write_30m_usd_per_1m) * 1000)
+  + trunc(cache_w_12h    * resolved(cache_write_12h_usd_per_1m) * 1000)
   + trunc(cache_w_1h     * resolved(cache_write_1h_usd_per_1m) * 1000)
   + trunc(output_plain   * resolved(output_usd_per_1m)         * 1000)
   + trunc(reasoning      * resolved(reasoning_usd_per_1m)      * 1000)
@@ -534,7 +541,7 @@ MP-B1. A settled request MUST persist `billing_breakdown_json` with this schema:
 ```
 
 MP-B2. `token_line_items[].usage_class` values are `input_uncached`, `cache_read`,
-`cache_write`, `cache_write_1h`, `output`, `reasoning_output`. Zero-quantity line items
+`cache_write`, `cache_write_1h`, `cache_write_30m`, `cache_write_12h`, `output`, `reasoning_output`. Zero-quantity line items
 are omitted (MP-C3).
 
 MP-B3. `price_row_model_id` is the `model_prices.model_id` of the applied row, or
@@ -652,6 +659,8 @@ For each mode name with a `cost` object:
 When the variant has service-tier costs and no `cost.tiers`, the standard table is one
 unbounded tier from the base `cost` object. The generated `billing_expr` MUST satisfy
 MP-C10.
+
+MP-Y5c. Map explicit `cache_write_30m` and `cache_write_12h` from models.dev costs and `input_cache_write_30m` and `input_cache_write_12h` from OpenRouter pricing using each source's normal unit conversion. For OpenAI provider prices with a positive generic write rate equal to 1.25 times input, fill absent TTL prices with the generic rate and 2.5 times input respectively. Apply this rule separately to each models.dev context and service tier. Explicit zero prices take precedence. Sync MUST honor field ownership and locks.
 
 MP-Y6. All grouped variants MUST be stored in `raw_json` as
 `{ "providers": { "<provider_id>": <variant model JSON>, ... } }` with every cost value
@@ -935,7 +944,7 @@ MP-UI3c. Pricing editor dialog:
   per-request price field, and a tiered editor for `billing_expr`. The tiered editor MUST
   include the standard context tiers and an optional Fast / Priority table
   (`service_tiers.fast`). Every tier exposes input, output, cache read, cache write 5m,
-  cache write 1h, and reasoning prices.
+  cache write 1h, cache write 30m, cache write 12h, and reasoning prices.
 - The dialog description states the unit for the selected mode: USD per 1M tokens for
   `per_token` and `tiered_expr`, USD per request for `per_request`.
 - Required fields carry a visible `*` and `aria-required`: model id (create mode),

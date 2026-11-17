@@ -14,7 +14,8 @@ pub fn map_models_dev(root: &Value) -> Result<Vec<SyncCandidate>, String> {
         for variant in variants {
             providers_map.insert(variant.provider_id.clone(), variant.raw.clone());
         }
-        let billing_expr = models_dev_billing_expr(model_id, winner)?;
+        let base_prices = winner_base_prices(winner);
+        let billing_expr = models_dev_billing_expr(model_id, winner, &base_prices)?;
         candidates.push(SyncCandidate {
             model_id: model_id.clone(),
             billing_mode: if billing_expr.is_some() {
@@ -26,6 +27,8 @@ pub fn map_models_dev(root: &Value) -> Result<Vec<SyncCandidate>, String> {
             output_usd_per_1m: winner.cost_output.clone(),
             cache_read_usd_per_1m: winner.cost_cache_read.clone(),
             cache_write_usd_per_1m: winner.cost_cache_write.clone(),
+            cache_write_30m_usd_per_1m: base_prices.get("cache_write_30m_usd_per_1m").cloned(),
+            cache_write_12h_usd_per_1m: base_prices.get("cache_write_12h_usd_per_1m").cloned(),
             reasoning_usd_per_1m: winner.cost_reasoning.clone(),
             per_request_usd: None,
             billing_expr,
@@ -56,15 +59,38 @@ const MODELS_DEV_TIER_FIELDS: &[(&str, &str)] = &[
     ("output", "output_usd_per_1m"),
     ("cache_read", "cache_read_usd_per_1m"),
     ("cache_write", "cache_write_usd_per_1m"),
+    ("cache_write_30m", "cache_write_30m_usd_per_1m"),
+    ("cache_write_12h", "cache_write_12h_usd_per_1m"),
     ("reasoning", "reasoning_usd_per_1m"),
 ];
 
-fn cost_field_map(cost: &serde_json::Map<String, Value>) -> BTreeMap<String, String> {
+/// OpenAI's published 30m and 12h rates apply when the catalog quotes its 1.25x write price.
+fn openai_write_rates(input: Option<&str>, write: Option<&str>) -> Option<(String, String)> {
+    let input = Decimal::from_str_exact(input?).ok()?;
+    let write = Decimal::from_str_exact(write?).ok()?;
+    if write <= Decimal::ZERO || input.checked_mul(Decimal::new(125, 2))? != write {
+        return None;
+    }
+    Some((trunc9(write), trunc9(write.checked_mul(Decimal::TWO)?)))
+}
+
+fn cost_field_map(cost: &serde_json::Map<String, Value>, openai: bool) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for (source, target) in MODELS_DEV_TIER_FIELDS {
         if let Some(value) = cost.get(*source).and_then(usd_cost_string) {
             map.insert(target.to_string(), value);
         }
+    }
+    if openai
+        && let Some((short, long)) = openai_write_rates(
+            map.get("input_usd_per_1m").map(String::as_str),
+            map.get("cache_write_usd_per_1m").map(String::as_str),
+        )
+    {
+        map.entry("cache_write_30m_usd_per_1m".into())
+            .or_insert(short);
+        map.entry("cache_write_12h_usd_per_1m".into())
+            .or_insert(long);
     }
     map
 }
@@ -72,19 +98,12 @@ fn cost_field_map(cost: &serde_json::Map<String, Value>) -> BTreeMap<String, Str
 fn winner_base_prices(
     winner: &crate::model_registry_store::SyncProviderVariant,
 ) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    for (field, value) in [
-        ("input_usd_per_1m", winner.cost_input.as_ref()),
-        ("output_usd_per_1m", winner.cost_output.as_ref()),
-        ("cache_read_usd_per_1m", winner.cost_cache_read.as_ref()),
-        ("cache_write_usd_per_1m", winner.cost_cache_write.as_ref()),
-        ("reasoning_usd_per_1m", winner.cost_reasoning.as_ref()),
-    ] {
-        if let Some(value) = value {
-            map.insert(field.to_string(), value.clone());
-        }
-    }
-    map
+    winner
+        .raw
+        .get("cost")
+        .and_then(Value::as_object)
+        .map(|cost| cost_field_map(cost, winner.provider_id == "openai"))
+        .unwrap_or_default()
 }
 
 fn unbounded_tier_from_prices(prices: &BTreeMap<String, String>) -> Option<Value> {
@@ -103,6 +122,7 @@ fn expression_tiers_from_models_dev_cost(
     cost: &serde_json::Map<String, Value>,
     base_prices: &BTreeMap<String, String>,
     path: &str,
+    openai: bool,
 ) -> Result<Option<Vec<Value>>, String> {
     let source_tiers = match cost.get("tiers") {
         None => return Ok(None),
@@ -157,6 +177,19 @@ fn expression_tiers_from_models_dev_cost(
             return Err(format!(
                 "parse_failed: models.dev model {model_id} {path}[{index}] has no input price"
             ));
+        }
+        if openai
+            && let Some((short, long)) = openai_write_rates(
+                mapped.get("input_usd_per_1m").and_then(Value::as_str),
+                mapped.get("cache_write_usd_per_1m").and_then(Value::as_str),
+            )
+        {
+            mapped
+                .entry("cache_write_30m_usd_per_1m")
+                .or_insert(Value::String(short));
+            mapped
+                .entry("cache_write_12h_usd_per_1m")
+                .or_insert(Value::String(long));
         }
         parsed.push((size, mapped));
     }
@@ -300,16 +333,20 @@ fn service_tier_tables(
         if key == "fast" && name != "fast" && tables.contains_key("fast") {
             continue;
         }
-        let mode_base = cost_field_map(cost);
+        let mode_base = cost_field_map(cost, winner.provider_id == "openai");
         if !mode_base.contains_key("input_usd_per_1m") {
             return Err(format!(
                 "parse_failed: models.dev model {model_id} mode {name} has no input price"
             ));
         }
         let path = format!("experimental.modes.{name}.cost.tiers");
-        let tiers = if let Some(tiers) =
-            expression_tiers_from_models_dev_cost(model_id, cost, &mode_base, &path)?
-        {
+        let tiers = if let Some(tiers) = expression_tiers_from_models_dev_cost(
+            model_id,
+            cost,
+            &mode_base,
+            &path,
+            winner.provider_id == "openai",
+        )? {
             tiers
         } else if standard_tiers.len() >= 2 {
             scale_expression_tiers(standard_tiers, standard_base, &mode_base, model_id, &key)?
@@ -326,13 +363,17 @@ fn service_tier_tables(
 fn models_dev_billing_expr(
     model_id: &str,
     winner: &crate::model_registry_store::SyncProviderVariant,
+    standard_base: &BTreeMap<String, String>,
 ) -> Result<Option<Value>, String> {
     let cost = winner.raw.get("cost").and_then(Value::as_object);
-    let standard_base = winner_base_prices(winner);
     let mut standard_tiers = match cost {
-        Some(cost) => {
-            expression_tiers_from_models_dev_cost(model_id, cost, &standard_base, "cost.tiers")?
-        }
+        Some(cost) => expression_tiers_from_models_dev_cost(
+            model_id,
+            cost,
+            standard_base,
+            "cost.tiers",
+            winner.provider_id == "openai",
+        )?,
         None => None,
     };
     let has_service_modes = winner
@@ -345,7 +386,7 @@ fn models_dev_billing_expr(
         return Ok(None);
     }
     if standard_tiers.is_none() {
-        standard_tiers = Some(vec![unbounded_tier_from_prices(&standard_base).ok_or_else(
+        standard_tiers = Some(vec![unbounded_tier_from_prices(standard_base).ok_or_else(
             || {
                 format!(
                     "parse_failed: models.dev model {model_id} needs a base input price for service tiers"
@@ -356,7 +397,7 @@ fn models_dev_billing_expr(
     let standard_tiers = standard_tiers.ok_or_else(|| {
         format!("parse_failed: models.dev model {model_id} missing standard price tiers")
     })?;
-    let service_tables = service_tier_tables(model_id, winner, &standard_tiers, &standard_base)?;
+    let service_tables = service_tier_tables(model_id, winner, &standard_tiers, standard_base)?;
     let mut expr_object = serde_json::Map::new();
     expr_object.insert("tiers".to_string(), Value::Array(standard_tiers));
     if !service_tables.is_empty() {
@@ -426,6 +467,18 @@ pub fn map_openrouter(root: &Value) -> Result<Vec<SyncCandidate>, String> {
         if !decimal_is_positive(input.as_ref()) && !decimal_is_positive(output.as_ref()) {
             continue;
         }
+        let price = |key: &str| {
+            pricing
+                .and_then(|p| p.get(key))
+                .and_then(per_token_to_per_1m)
+        };
+        let write = price("input_cache_write");
+        let derived = if vendor == Some("openai") {
+            openai_write_rates(input.as_deref(), write.as_deref())
+        } else {
+            None
+        };
+        let (short, long) = derived.unzip();
         let candidate = SyncCandidate {
             model_id: model_id.clone(),
             billing_mode: "per_token".to_string(),
@@ -434,9 +487,9 @@ pub fn map_openrouter(root: &Value) -> Result<Vec<SyncCandidate>, String> {
             cache_read_usd_per_1m: pricing
                 .and_then(|pricing| pricing.get("input_cache_read"))
                 .and_then(per_token_to_per_1m),
-            cache_write_usd_per_1m: pricing
-                .and_then(|pricing| pricing.get("input_cache_write"))
-                .and_then(per_token_to_per_1m),
+            cache_write_usd_per_1m: write,
+            cache_write_30m_usd_per_1m: price("input_cache_write_30m").or(short),
+            cache_write_12h_usd_per_1m: price("input_cache_write_12h").or(long),
             reasoning_usd_per_1m: None,
             per_request_usd: None,
             billing_expr: None,
@@ -527,6 +580,8 @@ pub fn map_new_api(root: &Value) -> Result<Vec<SyncCandidate>, String> {
                     output_usd_per_1m: Some(trunc9(output)),
                     cache_read_usd_per_1m: None,
                     cache_write_usd_per_1m: None,
+                    cache_write_30m_usd_per_1m: None,
+                    cache_write_12h_usd_per_1m: None,
                     reasoning_usd_per_1m: None,
                     per_request_usd: None,
                     billing_expr: None,
@@ -547,6 +602,8 @@ pub fn map_new_api(root: &Value) -> Result<Vec<SyncCandidate>, String> {
                     output_usd_per_1m: None,
                     cache_read_usd_per_1m: None,
                     cache_write_usd_per_1m: None,
+                    cache_write_30m_usd_per_1m: None,
+                    cache_write_12h_usd_per_1m: None,
                     reasoning_usd_per_1m: None,
                     per_request_usd: Some(trunc9(price)),
                     billing_expr: None,

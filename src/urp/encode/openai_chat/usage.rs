@@ -76,5 +76,10 @@ pub(crate) fn encode_chat_usage(usage: &Usage) -> Value {
         &mut usage_value["completion_tokens_details"],
         &output_details.modality_breakdown,
     );
+    if let Some(split) = &input_details.cache_write_tokens_details {
+        usage_value["prompt_tokens_details"]["cache_write_tokens_details"] = json!(split);
+    } else if let Some(detail) = usage_value["prompt_tokens_details"].as_object_mut() {
+        detail.remove("cache_write_tokens_details");
+    }
     usage_value
 }

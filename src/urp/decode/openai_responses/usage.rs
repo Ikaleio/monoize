@@ -42,6 +42,8 @@ struct OpenAiResponsesInputDetails {
     cache_creation_tokens: u64,
     #[serde(default, deserialize_with = "deserialize_u64ish_default")]
     cache_write_tokens: u64,
+    #[serde(default)]
+    cache_write_tokens_details: Option<Value>,
     #[serde(
         default,
         deserialize_with = "deserialize_u64ish_default",
@@ -102,22 +104,39 @@ impl From<OpenAiResponsesUsage> for Usage {
             .as_ref()
             .or(prompt_tokens_details.as_ref())
             .and_then(|details| {
+                let split = crate::urp::CacheWriteTokensDetails::from_wire(
+                    details.cache_write_tokens_details.as_ref(),
+                );
                 let cache_creation_tokens = details
                     .cache_creation_tokens
-                    .max(details.cache_write_tokens);
-                (details.cached_tokens > 0
+                    .max(details.cache_write_tokens)
+                    .max(split.as_ref().map_or(0, |s| s.total()));
+                let extra = details.extra.clone().into_iter().collect();
+                let modality_breakdown =
+                    crate::handlers::usage::parse_modality_breakdown_from_detail_object(Some(
+                        &extra,
+                    ));
+                let cache_read_modality_breakdown =
+                    crate::handlers::usage::parse_cache_read_modality_breakdown_from_detail_object(
+                        Some(&extra),
+                    );
+                (modality_breakdown.is_some()
+                    || cache_read_modality_breakdown.is_some()
+                    || details.cached_tokens > 0
+                    || split.is_some()
                     || cache_creation_tokens > 0
                     || details.tool_prompt_tokens > 0)
                     .then_some(InputDetails {
                         tool_prompt_modality_breakdown: None,
                         standard_tokens: 0,
                         cache_read_tokens: details.cached_tokens,
-                        cache_read_modality_breakdown: None,
+                        cache_read_modality_breakdown,
                         cache_creation_tokens,
+                        cache_write_tokens_details: split,
                         cache_creation_5m_tokens: 0,
                         cache_creation_1h_tokens: 0,
                         tool_prompt_tokens: details.tool_prompt_tokens,
-                        modality_breakdown: None,
+                        modality_breakdown,
                     })
             });
 
@@ -125,7 +144,13 @@ impl From<OpenAiResponsesUsage> for Usage {
             .as_ref()
             .or(completion_tokens_details.as_ref())
             .and_then(|details| {
-                (details.reasoning_tokens > 0
+                let extra = details.extra.clone().into_iter().collect();
+                let modality_breakdown =
+                    crate::handlers::usage::parse_modality_breakdown_from_detail_object(Some(
+                        &extra,
+                    ));
+                (modality_breakdown.is_some()
+                    || details.reasoning_tokens > 0
                     || details.accepted_prediction_tokens > 0
                     || details.rejected_prediction_tokens > 0)
                     .then_some(OutputDetails {
@@ -133,7 +158,7 @@ impl From<OpenAiResponsesUsage> for Usage {
                         reasoning_tokens: details.reasoning_tokens,
                         accepted_prediction_tokens: details.accepted_prediction_tokens,
                         rejected_prediction_tokens: details.rejected_prediction_tokens,
-                        modality_breakdown: None,
+                        modality_breakdown,
                     })
             });
 
@@ -178,7 +203,17 @@ impl From<OpenAiResponsesUsage> for Usage {
 }
 
 pub(crate) fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
-    serde_json::from_value::<OpenAiResponsesUsage>(Value::Object(obj.clone()))
+    let mut wire = obj.clone();
+    for (native, alias) in [
+        ("input_tokens", "prompt_tokens"),
+        ("output_tokens", "completion_tokens"),
+    ] {
+        if wire.contains_key(native) {
+            wire.remove(alias);
+        }
+    }
+    super::super::normalize_openai_usage_details(&mut wire);
+    serde_json::from_value::<OpenAiResponsesUsage>(Value::Object(wire))
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
             iterations: None,

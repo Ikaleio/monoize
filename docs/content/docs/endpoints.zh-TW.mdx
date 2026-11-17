@@ -355,6 +355,7 @@ Monoize 在三種用戶端協定的請求區塊上都接受 `cache_control` 和 
 
 - 捨棄未知成員。只有目標接受時才保留 `ttl`，Monoize 不會換算 TTL。
 - `cache_control` 接受 `5m` 和 `1h`。Responses 的 `prompt_cache_breakpoint` 接受 `30m` 和 `12h`。`openai` Chat 接受 `30m`。
+- OpenAI 在 `cache_write_tokens_details` 中分別回報 30 分鐘和 12 小時的快取寫入。Monoize 在協定轉換時保留兩項計數，並分別計費。
 - 轉換到 Responses 或 `openai` Chat 需要 GPT-5.6 及以上的模型 id。使用其他名稱的部署別名不會收到標記。
 - Responses 和 `openai` Chat 不會在 assistant 文字、工具呼叫或工具定義上收到轉換後的標記。帶標記的 system 訊息轉為輸入訊息。
 - 工具結果上的轉換標記移到其最後一個可用部分。

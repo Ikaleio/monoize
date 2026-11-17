@@ -48,6 +48,8 @@ struct GeminiUsage {
         alias = "cache_creation_token_count"
     )]
     cache_creation_tokens: u64,
+    #[serde(default, rename = "cacheWriteTokensDetails")]
+    cache_write_tokens_details: Option<Value>,
     #[serde(
         default,
         deserialize_with = "deserialize_u64ish_default",
@@ -109,7 +111,11 @@ impl TryFrom<GeminiUsage> for Usage {
             .candidates_token_count
             .checked_add(value.thoughts_token_count)
             .ok_or_else(|| "Gemini output token total overflow".to_string())?;
-        let input_details = (value.cached_content_token_count > 0
+        let split = crate::urp::CacheWriteTokensDetails::from_wire(
+            value.cache_write_tokens_details.as_ref(),
+        );
+        let input_details = (split.is_some()
+            || value.cached_content_token_count > 0
             || value.cache_creation_tokens > 0
             || value.tool_prompt_tokens > 0
             || input_modality.is_some()
@@ -119,7 +125,10 @@ impl TryFrom<GeminiUsage> for Usage {
             standard_tokens: 0,
             cache_read_tokens: value.cached_content_token_count,
             cache_read_modality_breakdown: cache_modality,
-            cache_creation_tokens: value.cache_creation_tokens,
+            cache_creation_tokens: value
+                .cache_creation_tokens
+                .max(split.as_ref().map_or(0, |s| s.total())),
+            cache_write_tokens_details: split,
             cache_creation_5m_tokens: 0,
             cache_creation_1h_tokens: 0,
             tool_prompt_tokens: value.tool_prompt_tokens,

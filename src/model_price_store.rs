@@ -25,6 +25,8 @@ pub struct ModelPriceRecord {
     pub cache_read_usd_per_1m: Option<String>,
     pub cache_write_usd_per_1m: Option<String>,
     pub cache_write_1h_usd_per_1m: Option<String>,
+    pub cache_write_30m_usd_per_1m: Option<String>,
+    pub cache_write_12h_usd_per_1m: Option<String>,
     pub reasoning_usd_per_1m: Option<String>,
     pub per_request_usd: Option<String>,
     pub billing_expr: Option<serde_json::Value>,
@@ -65,6 +67,10 @@ pub struct UpsertModelPriceInput {
     pub cache_write_usd_per_1m: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub cache_write_1h_usd_per_1m: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub cache_write_30m_usd_per_1m: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub cache_write_12h_usd_per_1m: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub reasoning_usd_per_1m: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -109,6 +115,8 @@ pub const LOCKABLE_FIELDS: &[&str] = &[
     "cache_read_usd_per_1m",
     "cache_write_usd_per_1m",
     "cache_write_1h_usd_per_1m",
+    "cache_write_30m_usd_per_1m",
+    "cache_write_12h_usd_per_1m",
     "reasoning_usd_per_1m",
     "per_request_usd",
     "billing_expr",
@@ -122,6 +130,8 @@ const TIER_PRICE_FIELDS: &[&str] = &[
     "cache_read_usd_per_1m",
     "cache_write_usd_per_1m",
     "cache_write_1h_usd_per_1m",
+    "cache_write_30m_usd_per_1m",
+    "cache_write_12h_usd_per_1m",
     "reasoning_usd_per_1m",
 ];
 
@@ -281,7 +291,7 @@ fn parse_time(raw: &str, column: &str) -> Result<DateTime<Utc>, String> {
 const MODEL_PRICE_COLUMNS: &str = "model_id, billing_mode, input_usd_per_1m, \
      output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m, \
      cache_write_1h_usd_per_1m, reasoning_usd_per_1m, per_request_usd, billing_expr, \
-     source, locked_fields, raw_json, enabled, updated_at";
+     source, locked_fields, raw_json, enabled, updated_at, cache_write_30m_usd_per_1m, cache_write_12h_usd_per_1m";
 
 fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
     let model_id: String = row.try_get("", "model_id").map_err(|e| e.to_string())?;
@@ -324,6 +334,12 @@ fn row_to_record(row: &QueryResult) -> Result<ModelPriceRecord, String> {
             .map_err(|e| e.to_string())?,
         cache_write_1h_usd_per_1m: row
             .try_get("", "cache_write_1h_usd_per_1m")
+            .map_err(|e| e.to_string())?,
+        cache_write_30m_usd_per_1m: row
+            .try_get("", "cache_write_30m_usd_per_1m")
+            .map_err(|e| e.to_string())?,
+        cache_write_12h_usd_per_1m: row
+            .try_get("", "cache_write_12h_usd_per_1m")
             .map_err(|e| e.to_string())?,
         reasoning_usd_per_1m: row
             .try_get("", "reasoning_usd_per_1m")
@@ -440,6 +456,8 @@ fn merge_upsert_input(
     merge_price!(cache_read_usd_per_1m, "cache_read_usd_per_1m");
     merge_price!(cache_write_usd_per_1m, "cache_write_usd_per_1m");
     merge_price!(cache_write_1h_usd_per_1m, "cache_write_1h_usd_per_1m");
+    merge_price!(cache_write_30m_usd_per_1m, "cache_write_30m_usd_per_1m");
+    merge_price!(cache_write_12h_usd_per_1m, "cache_write_12h_usd_per_1m");
     merge_price!(reasoning_usd_per_1m, "reasoning_usd_per_1m");
     merge_price!(per_request_usd, "per_request_usd");
     if let Some(expr) = &input.billing_expr {
@@ -628,6 +646,8 @@ impl ModelPriceStore {
             cache_read_usd_per_1m: None,
             cache_write_usd_per_1m: None,
             cache_write_1h_usd_per_1m: None,
+            cache_write_30m_usd_per_1m: None,
+            cache_write_12h_usd_per_1m: None,
             reasoning_usd_per_1m: None,
             per_request_usd: None,
             billing_expr: None,
@@ -656,13 +676,13 @@ impl ModelPriceStore {
              output_usd_per_1m = $4, cache_read_usd_per_1m = $5, cache_write_usd_per_1m = $6, \
              cache_write_1h_usd_per_1m = $7, reasoning_usd_per_1m = $8, per_request_usd = $9, \
              billing_expr = $10, source = $11, locked_fields = $12, raw_json = $13, \
-             enabled = $14, updated_at = $15 WHERE model_id = $1"
+             enabled = $14, updated_at = $15, cache_write_30m_usd_per_1m = $16, cache_write_12h_usd_per_1m = $17 WHERE model_id = $1"
         } else {
             "INSERT INTO model_prices (model_id, billing_mode, input_usd_per_1m, \
              output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m, \
              cache_write_1h_usd_per_1m, reasoning_usd_per_1m, per_request_usd, billing_expr, \
-             source, locked_fields, raw_json, enabled, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"
+             source, locked_fields, raw_json, enabled, updated_at, cache_write_30m_usd_per_1m, cache_write_12h_usd_per_1m) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
         };
         let result = self
             .db
@@ -686,6 +706,8 @@ impl ModelPriceStore {
                     raw_json.into(),
                     SeaValue::Int(Some(if record.enabled { 1 } else { 0 })),
                     record.updated_at.to_rfc3339().into(),
+                    record.cache_write_30m_usd_per_1m.clone().into(),
+                    record.cache_write_12h_usd_per_1m.clone().into(),
                 ],
             ))
             .await;

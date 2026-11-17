@@ -1426,6 +1426,14 @@ export async function upsertModelPriceOptimistic(
       input.cache_write_1h_usd_per_1m !== undefined
         ? input.cache_write_1h_usd_per_1m
         : (existing?.cache_write_1h_usd_per_1m ?? null),
+    cache_write_30m_usd_per_1m:
+      input.cache_write_30m_usd_per_1m !== undefined
+        ? input.cache_write_30m_usd_per_1m
+        : (existing?.cache_write_30m_usd_per_1m ?? null),
+    cache_write_12h_usd_per_1m:
+      input.cache_write_12h_usd_per_1m !== undefined
+        ? input.cache_write_12h_usd_per_1m
+        : (existing?.cache_write_12h_usd_per_1m ?? null),
     reasoning_usd_per_1m:
       input.reasoning_usd_per_1m !== undefined
         ? input.reasoning_usd_per_1m
