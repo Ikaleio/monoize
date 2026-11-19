@@ -54,8 +54,8 @@ impl SettingsStore {
         )
         .await?;
         self.set_if_not_exists(
-            "monoize_active_probe_enabled",
-            &defaults.monoize_active_probe_enabled.to_string(),
+            "monoize_honor_rate_limit",
+            &defaults.monoize_honor_rate_limit.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -66,6 +66,11 @@ impl SettingsStore {
         self.set_if_not_exists(
             "monoize_active_probe_success_threshold",
             &defaults.monoize_active_probe_success_threshold.to_string(),
+        )
+        .await?;
+        self.set_if_not_exists(
+            "monoize_active_probe_stream",
+            &defaults.monoize_active_probe_stream.to_string(),
         )
         .await?;
         self.set_if_not_exists(
@@ -400,8 +405,8 @@ impl SettingsStore {
                         settings.dashboard_performance_model_ids = model_ids;
                     }
                 }
-                "monoize_active_probe_enabled" => {
-                    settings.monoize_active_probe_enabled = row.value.parse().unwrap_or(true);
+                "monoize_honor_rate_limit" => {
+                    settings.monoize_honor_rate_limit = row.value.parse().unwrap_or(false);
                 }
                 "monoize_active_probe_interval_seconds" => {
                     settings.monoize_active_probe_interval_seconds =
@@ -410,6 +415,9 @@ impl SettingsStore {
                 "monoize_active_probe_success_threshold" => {
                     settings.monoize_active_probe_success_threshold =
                         row.value.parse().unwrap_or(1);
+                }
+                "monoize_active_probe_stream" => {
+                    settings.monoize_active_probe_stream = row.value.parse().unwrap_or(true)
                 }
                 "monoize_active_probe_model" => {
                     let trimmed = row.value.trim();
@@ -564,8 +572,8 @@ impl SettingsStore {
                     .map_err(|e| e.to_string())?,
             ),
             (
-                "monoize_active_probe_enabled",
-                settings.monoize_active_probe_enabled.to_string(),
+                "monoize_honor_rate_limit",
+                settings.monoize_honor_rate_limit.to_string(),
             ),
             (
                 "monoize_active_probe_interval_seconds",
@@ -574,6 +582,10 @@ impl SettingsStore {
             (
                 "monoize_active_probe_success_threshold",
                 settings.monoize_active_probe_success_threshold.to_string(),
+            ),
+            (
+                "monoize_active_probe_stream",
+                settings.monoize_active_probe_stream.to_string(),
             ),
             (
                 "monoize_active_probe_model",

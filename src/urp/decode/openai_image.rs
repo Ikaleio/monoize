@@ -164,13 +164,11 @@ pub(crate) fn parse_image_usage(usage_value: &Value) -> Option<Usage> {
     let input_tokens = usage_obj
         .get("input_tokens")
         .or_else(|| usage_obj.get("prompt_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+        .and_then(|v| v.as_u64());
     let output_tokens = usage_obj
         .get("output_tokens")
         .or_else(|| usage_obj.get("completion_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+        .and_then(|v| v.as_u64());
 
     let input_details = {
         let mut details = InputDetails::default();
@@ -205,8 +203,9 @@ pub(crate) fn parse_image_usage(usage_value: &Value) -> Option<Usage> {
 
     Some(Usage {
         iterations: None,
-        input_tokens,
-        output_tokens,
+        reported_token_counts: input_tokens.is_some() && output_tokens.is_some(),
+        input_tokens: input_tokens.unwrap_or(0),
+        output_tokens: output_tokens.unwrap_or(0),
         input_details,
         output_details,
         extra_body: HashMap::new(),

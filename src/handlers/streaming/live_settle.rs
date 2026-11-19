@@ -44,6 +44,7 @@ impl SettledStreamMetrics {
                 (
                     Some(urp::Usage {
                         iterations: None,
+                        reported_token_counts: false,
                         input_tokens: estimated_input_tokens,
                         output_tokens: estimated_output_tokens,
                         input_details: None,

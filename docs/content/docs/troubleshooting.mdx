@@ -34,7 +34,7 @@ No route serves the model, the final attempt failed without an upstream code, or
 2. **Transport failure.** The message is `failed to request upstream`. Check the Channel base URL and proxy.
 3. **No route exists.** Confirm at least one enabled Provider has an enabled Channel with weight above zero that maps the model.
 4. **Groups do not intersect.** The key's groups must share at least one group with the Provider. See [API Keys](/en/docs/dashboard/api-keys).
-5. **All Channels unhealthy.** The circuit breaker skips unhealthy Channels during cooldown. Read the failed attempts on the log row to find the root upstream error.
+5. **All eligible Channels unhealthy.** Monoize sends no traffic to unhealthy Channels while the circuit breaker is on. Traffic can resume after enough consecutive probes succeed, a dashboard test succeeds, or the timed recovery wait ends. Read the failed attempts on the log row to find the upstream error.
 6. **Multiplier cap.** A key with `max_multiplier` skips model entries priced above the cap.
 
 ### Other upstream statuses and codes
@@ -44,6 +44,13 @@ The client receives the final upstream status and code, for example `429 rate_li
 ### `400 unsupported_tool`
 
 The request sends an `openrouter:*` tool or another tool type without a Chat encoding to a Chat dialect that cannot represent it. Remove the tool, or route the model to a Channel with the `openrouter` or `generic` dialect. See [API Endpoints](/en/docs/endpoints).
+
+### `400 unsupported_media` in a Chat tool result
+
+- `Chat tool results support text only; image content cannot be discarded.`
+- `Chat tool results support text only; file content cannot be discarded.`
+
+The selected Chat dialect cannot carry the image or file in the tool result. Monoize ends that attempt before sending it upstream and tries the next eligible Channel or Provider within the retry limits. If no compatible route is available, route the model to a Channel that supports the content. Use a Chat Channel with the `openrouter` dialect or a compatible Responses, Messages, or Gemini Channel. Support depends on the media format and source.
 
 ### A built-in tool has no effect
 

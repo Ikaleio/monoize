@@ -38,7 +38,8 @@ Monoize 按巢狀順序嘗試路由：先在一個 Provider 內遍歷 Channel，
 | HTTP `408`、`429`、`5xx` | 是 | 是，Channel 預算耗盡後 |
 | 逾時、連線被拒絕或重設 | 是 | 是，Channel 預算耗盡後 |
 | 其他上游錯誤（如 `400`、`401`、`404`） | 否 | 是，立即前進 |
-| Monoize 自身錯誤（認證、餘額、驗證、計費） | 否 | 否；路由終止 |
+| 上游協定無法表示請求中的媒體內容 | 否 | 是，立即前進 |
+| Monoize 的其他錯誤（如認證、餘額、請求驗證、請求編碼或計費錯誤） | 否 | 否；路由終止 |
 
 ## 串流保證
 
@@ -50,14 +51,54 @@ Monoize 在第一個上游嘗試被接受後傳送 SSE 回應標頭。HTTP 嘗�
 
 ## 斷路器
 
-每個 Provider 有 `circuit_breaker_enabled` 開關。啟用時：
+每個 Provider 都有 `circuit_breaker_enabled` 開關。設為 `false` 後，Monoize 不再依據或追蹤該 Provider 的健康狀態，也不再進行主動探測。主動探測沒有獨立開關。
 
-- 一個 Channel 在 `window_seconds`（預設 `30`）內出現 `failure_count_threshold`（預設 `3`）次可重試失敗後變為不健康。
-- 不健康的 Channel 在 `cooldown_seconds`（預設 `60`）內被跳過。由 HTTP `429` 引起的失敗使用 `rate_limit_cooldown_seconds`（預設 `15`）。
-- 開啟 `per_model_circuit_break` 後，健康狀態按 `(Channel, 模型)` 組合追蹤，而不是按 Channel。
-- 開啟主動探測後，Monoize 在背景探測冷卻結束的 Channel，達到成功閾值後恢復。
+儀表板顯示三種 Channel 健康狀態：
 
-將 Provider 的 `circuit_breaker_enabled` 設為 `false` 可忽略其健康狀態。該 Provider 的被動熔斷和主動探測隨之停止。
+- **健康。** Channel 符合其他路由條件時，可以接收流量。
+- **不健康。** 在 Channel 恢復前，Monoize 不會向它轉送任何請求。
+- **已停用。** `enabled` 為 `false`。無論是否啟用斷路器，Channel 都不會接收流量。
+
+啟用斷路器後，持續性故障會立即使 Channel 變為不健康。暫時性故障和流量限制錯誤在 30 秒內累計達 3 次時，預設會觸發斷路。啟用 `per_model_circuit_break` 後，Monoize 會分別追蹤 Channel 中各模型的健康狀態。某個模型不健康時，不影響同一 Channel 中其他模型接收流量。
+
+### 主節點上的探測復原
+
+主節點透過主動探測讓非 Replicate Channel 恢復健康。通常，Monoize 會在斷路後等候一個探測間隔，再進行第一次探測。探測失敗會將連續成功次數歸零，再等一個間隔才進行下一次探測。下文的流量限制規則可取代這兩種等候時間。
+
+連續成功次數達到門檻後，Channel 或模型才會恢復健康。探測成功但未達門檻時，Monoize 會在一個間隔後安排下次探測。探測間隔結束只表示可以探測，不會恢復轉送流量。Monoize 不會探測已停用的 Provider、已停用的 Channel 或權重為零的 Channel。
+
+| 探測設定 | 全域設定鍵 | Provider 或 Channel 覆寫欄位 | 預設值 |
+| --- | --- | --- | --- |
+| 探測間隔 | `monoize_active_probe_interval_seconds` | `active_probe_interval_seconds_override` | 30 秒 |
+| 成功門檻 | `monoize_active_probe_success_threshold` | `active_probe_success_threshold_override` | 成功 1 次 |
+| 探測模型 | `monoize_active_probe_model` | `active_probe_model_override` | `null` |
+| 串流探測 | `monoize_active_probe_stream` | `active_probe_stream_override` | 開啟（`true`） |
+
+每項設定都依 Channel 覆寫值、Provider 覆寫值、全域值的順序採用第一個非 `null` 的值。將串流探測的覆寫值設為 `false` 會關閉串流，不會繼承下一層設定。
+
+以 Channel 為單位斷路時，如果該 Channel 提供設定中的探測模型，就使用該模型。如果沒有設定，或該 Channel 未提供設定中的模型，則選擇依字典順序排列的第一個邏輯模型鍵。啟用 `per_model_circuit_break` 後，Monoize 會用各不健康模型自己的邏輯模型鍵進行探測。
+
+Responses、Chat Completions、Messages 和 Gemini 的探測請求一開始只包含一則 `hi` 訊息，輸出上限為 16 個 token，預設要求串流回應。Monoize 先套用 Provider 的請求變換，再套用全域請求變換。變換可以修改輸出上限或串流選項。Monoize 使用與一般轉送相同的編碼器，一律透過 HTTP 傳送探測請求。變換或編碼出錯時，探測失敗，不會向上游送出請求。
+
+探測成功須取得 HTTP `2xx` 回應。串流探測還要求轉送所用的解碼器讀到終止事件，且沒有送出錯誤事件。非串流探測則要求該解碼器成功讀取回應本文。圖片與決策類 Channel 使用原生非串流探測，不套用變換，也不採用串流探測設定。
+
+### 定時復原
+
+任何節點上的 Replicate Channel，以及複本節點上的所有 Channel，都採用定時復原，不進行主動探測。一般等候時間（`cooldown_seconds`）預設為 60 秒。透過全域設定 `monoize_passive_cooldown_seconds` 或 Channel 的 `passive_cooldown_seconds_override` 調整。等候結束後，Channel 或模型無須探測即可恢復健康。
+
+### 遵守上游流量限制
+
+`monoize_honor_rate_limit` 預設為 `false`。可透過 Provider 或 Channel 的 `honor_rate_limit_override` 覆寫全域設定。Monoize 依 Channel、Provider、全域的順序，採用第一個非 `null` 的值。明確設為 `false` 表示關閉，而不是繼承。
+
+啟用後，如果觸發斷路的是 HTTP `429` 或其他可識別的流量限制錯誤，首次探測或定時復原前會改用流量限制冷卻時間。這段時間預設為 15 秒。透過全域設定 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 調整。
+
+如果上游傳回有效且較長的 `Retry-After`，Monoize 會採用該值。比較前，Monoize 會將從回應標頭解析出的時間限制在 3600 秒以內。有效的 `retry-after-ms` 優先於 `Retry-After`，並無條件進位至整秒。探測本身若受流量限制，則根據該次探測的回應套用相同規則。關閉此設定時，流量限制錯誤仍使用一般探測間隔或定時復原等候時間。
+
+### 儀表板測試和啟用開關
+
+執行 [Channel 測試](/zh-TW/docs/dashboard/providers-and-channels)，無須等候主動探測即可確認是否恢復。測試與主動探測採用相同的請求處理流程和成功判定規則。對補全類測試，**快速測試**採用 Channel 實際生效的串流設定；在測試對話框中可以自行選擇初始串流模式。測試成功後，Channel 會立即恢復健康。啟用 `per_model_circuit_break` 時，只有通過測試的模型會恢復健康。這項測試不支援 Replicate 補全請求。
+
+啟用或停用 Channel 都會清除其健康記錄，包括各模型的健康狀態。
 
 ## 工作階段親和
 

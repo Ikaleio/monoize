@@ -187,9 +187,7 @@ pub(in crate::handlers) async fn call_streaming_image_capable_upstream(
         drop(upstream_body);
         let path = "/v1/images/edits".to_string();
         let fields = urp::encode::openai_image::multipart_fields(req_attempt, &req_attempt.model)
-            .map_err(|message| {
-            AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-        })?;
+            .map_err(|error| upstream_encode_error("invalid_request", error))?;
         let capture_upstream_request = capture_active.then(|| {
             crate::request_capture::multipart_capture_object_from_upstream_fields(&fields)
         });
@@ -261,7 +259,9 @@ mod media_resource_routing_tests {
             passive_failure_count_threshold: 0,
             passive_cooldown_seconds: 0,
             passive_window_seconds: 0,
-            passive_rate_limit_cooldown_seconds: 0,
+            rate_limit_wait: None,
+            probe_interval: 1,
+            recovery_mode: crate::monoize_routing::RecoveryMode::Probe,
             channel_max_retries: 1,
             channel_retry_interval_ms: 0,
             circuit_breaker_enabled: false,
@@ -295,7 +295,7 @@ mod media_resource_routing_tests {
             session_affinity_value: None,
             client_anthropic_headers: Default::default(),
             origin_key: None,
-            origin_peer_channel_ids: vec![],
+            origin_peers: None,
         }
     }
 

@@ -67,7 +67,7 @@ R-CH-1. Candidate channels are channels with:
 - `weight > 0`
 - `channel.models` contains the requested logical model
 - when `max_multiplier` exists, `channel.models[model].multiplier <= max_multiplier`
-- runtime health state is healthy or probing-eligible for the requested model (respecting per-model health keying when `per_model_circuit_break == true`)
+- when `provider.circuit_breaker_enabled = true`, the requested model's relevant health key is not effectively `unhealthy` (`monoize-upstream-routing.spec.md` HSK-1 through HSK-3, HSK-7, HSK-10). When the flag is `false`, the router MUST ignore runtime health.
 
 R-CH-2. If no candidate channels exist, router MUST continue to next provider.
 
@@ -159,9 +159,11 @@ R-ERR-3. For a same-Channel retry error, the router MAY retry that Channel withi
 
 R-ERR-4. For any other upstream error, the router MUST NOT retry the same Channel. The router MUST advance to the next eligible Channel or Provider.
 
-R-ERR-5. A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing.
+R-ERR-5. A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing unless it is a target-capability failure under R-ERR-7.
 
 R-ERR-6. Persistent Channel failure statuses and structured signals, RateLimited structured signals, and Transient structured signals MUST equal RTA-5a and RTA-5b in `monoize-upstream-routing.spec.md`. Persistent failures MUST NOT retry the same Channel and MUST make the relevant health entry unhealthy after the first occurrence. HTTP `400`, `409`, and `422` without a listed signal MUST NOT update Channel health.
+
+R-ERR-7. A target-capability rejection from `media-transport.spec.md` MT20a MUST fail only its selected attempt, before upstream dispatch. Record one `tried_providers` entry with the original diagnostic. Do not retry the same Channel, record passive health, or clear affinity. Continue with the next eligible Channel or Provider. If the last attempt fails this way, keep its status, code, and message under `monoize-upstream-routing.spec.md` RTA-5e and RTA-8c.
 
 ## 6. Streaming Constraint
 
@@ -178,31 +180,31 @@ R-H-1. Passive breaker defaults:
 - `cooldown_seconds = 60`
 - `rate_limit_cooldown_seconds = 15`
 
-R-H-2. Effective passive breaker parameters MUST be resolved per channel: channel override first, global setting fallback.
+R-H-2. Effective passive breaker parameters MUST be resolved per Channel: Channel override first, global setting fallback. Recovery MUST NOT resolve the rate-limit wait when honor-rate-limit is false (`monoize-upstream-routing.spec.md` CFG-5).
 
 R-H-3. Health state MUST be keyed by `channel_id` when `per_model_circuit_break == false`, or by `(channel_id, logical_model)` when `per_model_circuit_break == true`.
 
 R-H-4. A Persistent failure defined by R-ERR-6 MUST mark the health state entry unhealthy immediately. A Transient or RateLimited failure MUST mark it unhealthy when the count of failed samples within the sliding window (`window_seconds`) reaches the effective threshold defined by R-H-15.
 
-R-H-5. If unhealthy is triggered by retryable `429`, cooldown MUST use `rate_limit_cooldown_seconds`; otherwise use `cooldown_seconds`.
+R-H-5. A passive trip MUST record the trip fields and set the initial `next_recovery_at` per `monoize-upstream-routing.spec.md` PHS-4 and PHS-5. Only a RateLimited trip with effective `honor_rate_limit = true` uses the greater of `rate_limit_cooldown_seconds` and the parsed Retry-After (or `0` seconds when absent).
 
-R-H-6. Unhealthy state entries MUST be skipped during cooldown.
+R-H-6. With the Provider circuit breaker enabled, forwarding MUST skip each Channel whose relevant health key is effectively unhealthy, including after its probe due time. In `timed` mode the key MUST become effectively healthy at `next_recovery_at` (PHS-5).
 
-R-H-7. If active probing is enabled, channels whose cooldown elapsed MUST be probed periodically and recover after success threshold is reached. When `per_model_circuit_break == true`, a successful probe MUST clear all model-specific unhealthy entries for that channel.
+R-H-7. The primary scheduler MUST target only unhealthy keys in `probe` mode whose due time has arrived, subject to R-H-8 and R-H-11. A probe MUST change only the health key it targeted and only if the result passes AHS-10. The success threshold and subsequent due times are defined by AHS-2 and AHS-8 in `monoize-upstream-routing.spec.md`.
 
-R-H-8. If `provider.circuit_breaker_enabled == false`, active probing MUST be skipped for that provider.
+R-H-8. If `provider.circuit_breaker_enabled = false`, the scheduler MUST NOT probe that Provider, passive health state MUST NOT be updated for its forwarding attempts, and routing MUST ignore its runtime health state.
 
-R-H-9. Every successful mutation of a passive-health or active-probe system setting MUST advance the routing configuration revision and clear all runtime Channel health entries.
+R-H-9. Before returning success for a mutation of a passive-health setting, `monoize_honor_rate_limit`, or any probe setting in `monoize-upstream-routing.spec.md` CFG-3 (including `monoize_active_probe_stream`), the server MUST advance the routing configuration revision and clear all process-local Channel health entries.
 
 R-H-10. A request or active probe captured under an older routing configuration revision MUST NOT publish a health-state update after the revision advances.
 
-R-H-11. Each active-probe scheduler tick MUST load only enabled Providers with `circuit_breaker_enabled = true` and at least one enabled Channel whose weight is greater than zero. It MUST load only enabled, positive-weight Channel rows. Loading their Providers, Channels, and Channel model entries MUST use a bounded query count independent of the number of Providers and Channels.
+R-H-11. An active-probe scheduler tick MUST perform no database query if the runtime health map contains no unhealthy key in `probe` mode. Otherwise it MUST load only enabled Providers with `circuit_breaker_enabled = true` and at least one enabled, positive-weight Channel. It MUST load only enabled, positive-weight Channel rows. Loading their Providers, Channels, and Channel model entries MUST use a bounded query count independent of the number of Providers and Channels.
 
 R-H-12. `MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES` MUST configure the positive process-local Channel health entry limit. An unset, empty, zero, negative, or invalid value MUST use `10000`.
 
 R-H-13. The process-local Channel health map MUST NOT exceed its configured entry limit. At capacity, a new health key MUST NOT be inserted or evict an existing key. Every missing health key MUST be treated as ineligible until an entry slot becomes available. Capacity checks MUST be constant-time and MUST NOT scan the health map.
 
-R-H-14. Active-probe evaluation of a Channel with per-model circuit breaking MUST derive health keys from that Channel's configured model set. It MUST perform point lookups for those keys and MUST NOT scan the complete Channel health map.
+R-H-14. For a Channel with `per_model_circuit_break = true`, the scheduler MUST match each due `(channel_id, logical_model)` key to that Channel's configured `models` entry and consider it independently. It MUST NOT probe a model absent from that Channel or substitute the configured probe model for the key's logical model. Candidate evaluation for one Channel MUST NOT scan the complete health map.
 
 R-H-15. `MONOIZE_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES` MUST configure the positive process-local maximum passive-failure threshold per health-state entry. An unset, empty, zero, negative, invalid, or overflowing value MUST use `1024`. The effective threshold MUST equal the smaller of this limit and the resolved Channel threshold and MUST be at least `1`.
 

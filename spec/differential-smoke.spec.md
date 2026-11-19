@@ -18,7 +18,8 @@ Bootstrap missing seed files with the base binary.
 `--rebootstrap` MUST replace that seed directory and rebuild it with the base binary.
 Create one administrator, one forwarding API key, and three mock channels.
 Each channel MUST expose plain and reasoning model names for one upstream protocol.
-Disable CAPTCHA, automatic price synchronization, and active probes in the seed.
+Disable CAPTCHA and automatic price synchronization in the seed. To prevent scheduler
+probes, set `circuit_breaker_enabled = false` on every seeded Provider.
 Allow unpriced requests and missing usage so protocol errors remain observable.
 Never print the seed API key or administrator password.
 

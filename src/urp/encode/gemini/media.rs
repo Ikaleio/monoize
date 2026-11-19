@@ -1,13 +1,13 @@
 //! Gemini media and call validation before encoding (GEM-3, media-transport.spec.md).
 //! A node Gemini cannot carry fails the whole request or response; nothing is dropped.
 
-use crate::urp::media::{is_text_mime, mime_essence};
+use crate::urp::media::{MediaError, is_text_mime, mime_essence};
 use crate::urp::{
     AudioSource, FileSource, ImageSource, MediaMetadata, Node, ToolCallType, ToolResultContent,
 };
 use serde_json::Value;
 
-pub(super) fn validate_media_nodes(nodes: &[Node]) -> Result<(), String> {
+pub(super) fn validate_media_nodes(nodes: &[Node]) -> Result<(), MediaError> {
     for node in nodes {
         match node {
             Node::ToolCall {
@@ -68,7 +68,7 @@ pub(super) fn validate_media_nodes(nodes: &[Node]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_image(source: &ImageSource, metadata: &MediaMetadata) -> Result<(), String> {
+fn validate_image(source: &ImageSource, metadata: &MediaMetadata) -> Result<(), MediaError> {
     match source {
         ImageSource::Base64 { media_type, .. } => validate_media_mime(media_type, None),
         ImageSource::Url { url, .. } => metadata
@@ -79,7 +79,7 @@ fn validate_image(source: &ImageSource, metadata: &MediaMetadata) -> Result<(), 
     }
 }
 
-fn validate_file(source: &FileSource, metadata: &MediaMetadata) -> Result<(), String> {
+fn validate_file(source: &FileSource, metadata: &MediaMetadata) -> Result<(), MediaError> {
     match source {
         FileSource::Base64 { media_type, .. } => validate_media_mime(media_type, None),
         FileSource::Url { url } => metadata
@@ -91,7 +91,7 @@ fn validate_file(source: &FileSource, metadata: &MediaMetadata) -> Result<(), St
 }
 
 /// Documented Gemini media MIME types. `video/*` is accepted only for YouTube URLs.
-fn validate_media_mime(mime: &str, url: Option<&str>) -> Result<(), String> {
+fn validate_media_mime(mime: &str, url: Option<&str>) -> Result<(), MediaError> {
     let base = mime_essence(mime);
     let supported = matches!(
         base.as_str(),
@@ -144,8 +144,15 @@ fn validate_media_mime(mime: &str, url: Option<&str>) -> Result<(), String> {
     if supported {
         Ok(())
     } else {
-        Err(format!(
+        let message = format!(
             "Gemini does not support media MIME type {mime}. Supply a documented format without changing the actual bytes."
-        ))
+        );
+        Err(
+            if base == "application/octet-stream" || mime.parse::<mime::Mime>().is_err() {
+                MediaError::Invalid(message)
+            } else {
+                MediaError::TargetCapability(message)
+            },
+        )
     }
 }

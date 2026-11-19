@@ -290,6 +290,7 @@ fn gemini_system_media_is_typed_before_target_capability_check() {
         assert!(
             encode::gemini::encode_request_checked(&req, "gemini-test")
                 .unwrap_err()
+                .message()
                 .contains("system")
         );
     }
@@ -598,6 +599,7 @@ async fn gemini_custom_calls_and_results_fail_without_discarding_content() {
             assert!(
                 encode::gemini::encode_request_checked(&req, "gemini-test")
                     .unwrap_err()
+                    .message()
                     .contains("custom tool")
             );
             assert!(

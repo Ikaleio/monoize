@@ -8,7 +8,7 @@ use super::signatures::{resolve_bound_signatures, sign_current_turn_calls};
 use super::tools::{encode_tool_config, encode_tools, validate_tools};
 use crate::urp::decode::gemini::{CONTINUATION_ID_PREFIX, node_extra};
 use crate::urp::encode::merge_extra;
-use crate::urp::media::{error_body, prepare_request};
+use crate::urp::media::{MediaError, error_body, prepare_request};
 use crate::urp::{
     GEMINI_CONTENT_EXTRA_KEY, GEMINI_SYSTEM_EXTRA_KEY, ImageSource, Node, OrdinaryRole,
     ProviderProtocol, StopControl, UrpRequest, is_internal_key,
@@ -17,10 +17,10 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
-    encode_request_checked(req, upstream_model).unwrap_or_else(|message| error_body(&message))
+    encode_request_checked(req, upstream_model).unwrap_or_else(|error| error_body(error.message()))
 }
 
-pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
+pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, MediaError> {
     if req
         .logprobs
         .as_ref()
@@ -38,9 +38,7 @@ pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<
         matches!(node, Node::Image { role, .. } | Node::Audio { role, .. } | Node::File { role, .. } | Node::ProviderItem { role, .. }
             if matches!(role, OrdinaryRole::System | OrdinaryRole::Developer))
     }) {
-        return Err(
-            "Gemini system instructions support text only; media cannot be discarded".into(),
-        );
+        return Err(MediaError::capability("Gemini system instructions support text only; media cannot be discarded"));
     }
     Ok(encode_prepared_request(&prepared, upstream_model))
 }

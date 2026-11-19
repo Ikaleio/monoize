@@ -77,7 +77,7 @@ fn provider_supports_native_tool_family(
 fn provider_supports_tool_definition(
     tool: &urp::ToolDefinition,
     provider_type: ProviderType,
-    downstream: DownstreamProtocol,
+    same_family: bool,
 ) -> bool {
     if tool.tool_type == "function" {
         return true;
@@ -118,7 +118,7 @@ fn provider_supports_tool_definition(
         return provider_supports_native_tool_family(provider_type, family);
     }
 
-    downstream.is_same_family(provider_type)
+    same_family
         && matches!(
             provider_type,
             ProviderType::Responses | ProviderType::Messages
@@ -309,7 +309,7 @@ pub(in crate::handlers) fn map_web_search_tools_for_provider(
 pub(in crate::handlers) fn filter_tools_for_provider(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
-    downstream: DownstreamProtocol,
+    same_family: bool,
 ) {
     map_web_search_tools_for_provider(req, provider_type);
     let Some(tools) = req.tools.as_mut() else {
@@ -319,7 +319,7 @@ pub(in crate::handlers) fn filter_tools_for_provider(
         return;
     };
 
-    tools.retain(|tool| provider_supports_tool_definition(tool, provider_type, downstream));
+    tools.retain(|tool| provider_supports_tool_definition(tool, provider_type, same_family));
     if tools.is_empty() {
         req.tools = None;
         req.tool_choice = None;
@@ -386,22 +386,14 @@ mod tests {
             {"computerUse":{"environment":"ENVIRONMENT_BROWSER"}}, {"googleSearch":{}},
             {"functionDeclarations":[{"name":"run","parametersJsonSchema":{"type":"object"}}]}],
             "toolConfig":{"functionCallingConfig":{"mode":"VALIDATED","allowedFunctionNames":["run"]}}})).unwrap();
-        filter_tools_for_provider(
-            &mut request,
-            ProviderType::Gemini,
-            DownstreamProtocol::Responses,
-        );
+        filter_tools_for_provider(&mut request, ProviderType::Gemini, false);
         assert_eq!(request.tools.as_ref().unwrap().len(), 3);
         assert!(request.tool_choice.is_some());
         assert_eq!(
             urp::encode::gemini::encode_request(&request, "m")["toolConfig"]["functionCallingConfig"],
             json!({"mode":"VALIDATED","allowedFunctionNames":["run"]})
         );
-        filter_tools_for_provider(
-            &mut request,
-            ProviderType::Responses,
-            DownstreamProtocol::Responses,
-        );
+        filter_tools_for_provider(&mut request, ProviderType::Responses, true);
         assert_eq!(request.tools.as_ref().unwrap().len(), 1);
         assert_eq!(request.tools.as_ref().unwrap()[0].tool_type, "function");
     }

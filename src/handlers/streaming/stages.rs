@@ -28,6 +28,7 @@ pub(super) async fn probe_stream_first_output(
     decode_handle: tokio::task::JoinHandle<AppResult<()>>,
     runtime_metrics: &Arc<Mutex<StreamRuntimeMetrics>>,
     commit: &StreamCommit,
+    retry_after_seconds: Option<u16>,
 ) -> Result<CommittedUpstreamStream, PreOutputStreamFailure> {
     let mut buffered = Vec::new();
     loop {
@@ -115,7 +116,7 @@ pub(super) async fn probe_stream_first_output(
                 });
             }
             None => {
-                let error = match decode_handle.await {
+                let mut error = match decode_handle.await {
                     Ok(Ok(())) => AppError::new(
                         StatusCode::BAD_GATEWAY,
                         "upstream_stream_error",
@@ -130,6 +131,9 @@ pub(super) async fn probe_stream_first_output(
                 };
                 let failure_class =
                     is_upstream_adapter_failure(&error).then_some(RetryableFailureClass::Transient);
+                if failure_class.is_some() {
+                    error.retry_after_seconds = retry_after_seconds;
+                }
                 return Err(PreOutputStreamFailure {
                     error,
                     failure_class,

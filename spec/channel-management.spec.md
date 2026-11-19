@@ -30,10 +30,11 @@ A provider object MUST include:
 - `channels: Channel[]`
 - `transforms: TransformRuleConfig[]` (ordered, default empty)
 - `api_type_overrides: ApiTypeOverride[]` (ordered, default empty). Each entry is `{ pattern: string, api_type: enum("responses","chat_completion","messages","gemini","openai_image","openrouter_image","replicate","system_one","openai_decisions"), chat_dialect?: enum("openai","deepseek","openrouter","vercel","generic") }`. `chat_dialect` is present exactly on `chat_completion` entries (CP-INV-17).
-- `active_probe_enabled_override?: boolean | null`
+- `honor_rate_limit_override?: boolean | null` (`null` inherits the global setting, CFG-4a)
 - `active_probe_interval_seconds_override?: integer | null`
 - `active_probe_success_threshold_override?: integer | null`
 - `active_probe_model_override?: string | null`
+- `active_probe_stream_override?: boolean | null` (`null` inherits the global setting, CFG-3a)
 - `request_timeout_ms_override?: integer | null`
 - `extra_fields_whitelist?: string[] | null`
 - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -79,16 +80,17 @@ A channel object MUST NOT include `allow_missing_usage` or
 Provider (`model-pricing.spec.md` §7). A request body containing either removed field
 MUST be rejected with HTTP 400 code `invalid_request`.
 
-Runtime projection fields MAY be returned by list/get APIs:
+CM-HEALTH-1. The Provider list and detail APIs MAY return these Channel runtime projection fields. They report automatic runtime health, not the display status of `enabled` or `weight`. Use `monoize-upstream-routing.spec.md` HSK-10 for every key's effective health. When `circuit_breaker_enabled = false`, project health as if no entries existed.
 
-- `_healthy: boolean`
+- `_healthy: boolean`, true exactly when `_health_status = healthy`.
 - `_last_success_at: RFC3339 | null`
-- `_health_status: enum("healthy","probing","unhealthy")`
+- `_health_status: enum("healthy","unhealthy")`. For a Channel-level breaker, use the base key's effective status. For a per-model breaker, use `unhealthy` if any of the Channel's configured logical model keys is effectively unhealthy; otherwise use `healthy`.
 - `_unhealthy_models: string[]`. This list MUST be sorted ascending and MUST contain the Channel model keys whose model-specific health status is `unhealthy`. It MUST be empty when `per_model_circuit_break = false`.
-- `_probing_models: string[]`. This list MUST be sorted ascending and MUST contain the Channel model keys whose model-specific health status is `probing`. It MUST be empty when `per_model_circuit_break = false`.
-- `_cooldown_until: RFC3339 | null`. For a Channel-level breaker, this value is the base health entry cooldown. For a per-model breaker, this value is the latest cooldown among the Channel's currently unhealthy model entries.
+- `_next_recovery_at: RFC3339 | null`. For a Channel-level breaker, return the base key's `next_recovery_at` only when the key is effectively unhealthy. For a per-model breaker, return the earliest `next_recovery_at` among currently unhealthy configured model keys. Return null when no relevant key is unhealthy. The time is the next probe due time in `probe` mode or the recovery time in `timed` mode.
 
-`GET /api/dashboard/providers` MAY also return `model_runtime_statuses` on each Provider. Each entry MUST have this schema:
+The former `_probing_models` and `_cooldown_until` fields are removed and MUST NOT be returned.
+
+CM-HEALTH-2. `GET /api/dashboard/providers` MAY also return `model_runtime_statuses` on each Provider. Each entry MUST have this schema:
 
 ```json
 {
@@ -100,7 +102,7 @@ Runtime projection fields MAY be returned by list/get APIs:
     {
       "channel_id": "string",
       "channel_name": "string",
-      "cooldown_until": "RFC3339 | null"
+      "next_recovery_at": "RFC3339 (optional)"
     }
   ],
   "pricing_status": "complete | partial | missing",
@@ -115,7 +117,9 @@ Runtime projection fields MAY be returned by list/get APIs:
 
 The array MUST contain one entry for each distinct logical model key in the Provider's Channel model maps. The array and each nested Channel array MUST be sorted ascending by model or Channel name, with Channel id as the tie breaker.
 
-For availability counts, an eligible Channel MUST be enabled, have positive weight, and contain the logical model. A Channel is unavailable only while the relevant health entry status is `unhealthy`. A `probing` Channel remains available to routing. If the circuit breaker is disabled, every eligible Channel is available. `availability_status` MUST be `unavailable` when at least one eligible Channel exists and none is available, `degraded` when some but not all eligible Channels are available, and `healthy` otherwise.
+For availability counts, an eligible Channel MUST be enabled, have positive weight, and contain the logical model. If the circuit breaker is enabled, an eligible Channel is unavailable exactly when the relevant health key's effective status is `unhealthy`. If it is disabled, every eligible Channel is available. `breaker_channels` MUST contain exactly the unavailable eligible Channels. For each listed Channel, `next_recovery_at` MUST be the RFC3339 timestamp for the relevant health key when present, not the minimum across other model keys. Omit the field when the key has no recovery time. `availability_status` MUST be `unavailable` when at least one eligible Channel exists and none is available, `degraded` when some but not all eligible Channels are available, and `healthy` otherwise.
+
+The former `breaker_channels[].cooldown_until` field is removed and MUST NOT be returned.
 
 For pricing status, the denominator is every Channel model entry for the logical model, including disabled and zero-weight Channels. An entry is priced when its pricing key resolves to an applicable price under `model-pricing.spec.md` MP-R1..MP-R4. `pricing_status` MUST be `missing` when every such entry is unpriced, `partial` when only some entries are unpriced, and `complete` when none is unpriced.
 
@@ -125,13 +129,14 @@ Channel-level passive breaker override fields MAY be present:
 - `passive_window_seconds_override: integer? (>= 1)`
 - `passive_cooldown_seconds_override: integer? (>= 1)`
 - `passive_rate_limit_cooldown_seconds_override: integer? (>= 1)`
+- `honor_rate_limit_override: boolean | null` (`null` inherits from the Provider or global setting, CFG-4a)
 
 Channel-level active probe override fields MAY be present:
 
-- `active_probe_enabled_override: boolean?`
 - `active_probe_interval_seconds_override: integer? (>= 1)`
 - `active_probe_success_threshold_override: integer? (>= 1)`
 - `active_probe_model_override: string?`
+- `active_probe_stream_override: boolean | null` (`null` inherits from the Provider or global setting, CFG-3a)
 
 Channel-level affinity override fields MAY be present:
 
@@ -302,7 +307,7 @@ CM-AFF-2. When effective automatic session affinity is enabled and none of CM-AF
 The derivation MUST NOT include `tools` or `functions`. It MUST be a pure function of `instructions` plus the first two input nodes: identical heads yield identical values; appending further input nodes MUST NOT change the value; adding, removing, or reordering tool definitions MUST NOT change the value.
 When a decoded request is not available, the gateway MUST apply the same hash to the encoded upstream body using `instructions` (string or absent), `system` (when present), and the first at most 2 entries of `messages` else `input`, and MUST still omit `tools` and `functions`.
 
-CM-AFF-3. Automatic session affinity applies only to proxied traffic, except for the OpenCode probe rule in this paragraph. Liveness probes (§3.8) MUST NOT send derived values or client passthrough values; explicit static `extra_headers` entries continue to apply there under CM-HDR-1. For a direct OpenCode Zen/Go Channel, a liveness probe MUST send `x-opencode-session` and `x-session-affinity` with the literal value `mono-probe` when the corresponding name is absent from `extra_headers`. Purpose: OpenCode Go may reject requests that omit `x-opencode-session`.
+CM-AFF-3. Automatic session affinity applies only to proxied traffic, except for the OpenCode probe rule in this paragraph. Scheduled health probes and dashboard liveness probes (§3.8) MUST NOT send derived values or client passthrough values. Explicit static `extra_headers` entries continue to apply under CM-HDR-1. For a direct OpenCode Zen/Go Channel, either probe MUST send `x-opencode-session` and `x-session-affinity` with the literal value `mono-probe` for each name absent from `extra_headers`. Purpose: OpenCode Go may reject requests that omit `x-opencode-session`.
 
 CM-AFF-4. When effective automatic session affinity is enabled and any of CM-AFF-1, CM-AFF-1a, CM-AFF-1b, or CM-AFF-2 produced a value for a proxied request, the gateway MUST record that exact value in `request_logs.session_affinity_value` on the request's terminal log row (`request-logs.spec.md` §1.1). Requests whose effective automatic session affinity is disabled, liveness probes, and requests that produced no value MUST store null.
 
@@ -345,7 +350,13 @@ CM-READ-1. Every Channel `models` object in any Provider response (list, get, cr
   - `channel_retry_interval_ms?: integer`
   - `circuit_breaker_enabled?: boolean`
   - `per_model_circuit_break?: boolean`
-  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, active_probe_enabled_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, proxy_url?: string | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null, chat_dialect?: "openai" | "deepseek" | "openrouter" | "vercel" | "generic" | null }>`
+  - `honor_rate_limit_override?: boolean | null`
+  - `active_probe_interval_seconds_override?: integer | null`
+  - `active_probe_success_threshold_override?: integer | null`
+  - `active_probe_model_override?: string | null`
+  - `active_probe_stream_override?: boolean | null`
+  - `request_timeout_ms_override?: integer | null`
+  - `channels: Array<{ id?: string, name: string, provider_type: ProviderType, base_url: string, api_key: string, weight?: number, enabled?: boolean, models: Record<string, { redirect: string | null, multiplier: string }>, passive_failure_count_threshold_override?: integer | null, passive_window_seconds_override?: integer | null, passive_cooldown_seconds_override?: integer | null, passive_rate_limit_cooldown_seconds_override?: integer | null, honor_rate_limit_override?: boolean | null, active_probe_interval_seconds_override?: integer | null, active_probe_success_threshold_override?: integer | null, active_probe_model_override?: string | null, active_probe_stream_override?: boolean | null, affinity_enabled_override?: boolean | null, affinity_idle_ttl_seconds_override?: integer | null, affinity_failback_mode_override?: "sticky" | "prefer_higher_priority" | null, affinity_failback_delay_seconds_override?: integer | null, proxy_url?: string | null, extra_headers?: Record<string, string> | null, session_affinity_auto?: boolean | null, websocket_supported?: boolean | null, chat_dialect?: "openai" | "deepseek" | "openrouter" | "vercel" | "generic" | null }>`
   - `group_ids?: string[]`
   - `api_type_overrides?: ApiTypeOverride[]`
   - `strip_cross_protocol_nested_extra?: boolean | null`
@@ -399,7 +410,7 @@ CP-DEL-2. After delete completes, in-flight work created before deletion MUST NO
 - Response: the updated `Provider` (same shape as 3.2)
 - Errors: `404 not_found` when the Channel does not exist or does not belong to `provider_id`
 
-CM-CH-EN-1. This endpoint MUST change only the Channel `enabled` flag and `updated_at`. It MUST NOT change any other Channel or Provider field, MUST NOT require the Channel API key, and MUST NOT clear runtime health or affinity entries. It MUST advance the routing configuration revision so routing observes the change on the next request.
+CM-CH-EN-1. This endpoint MUST change only the Channel `enabled` flag and `updated_at`. It MUST NOT change any other Channel or Provider field, require the Channel API key, or clear affinity entries. On either transition of `enabled`, it MUST remove the base health entry and all per-model health entries for that Channel before returning the updated Provider. It MUST advance the routing configuration revision so routing observes the change on the next request and in-flight work under the prior revision cannot recreate those entries (HSK-5).
 
 ### 3.7 Fetch channel models
 
@@ -444,42 +455,32 @@ CM-CH-EN-1. This endpoint MUST change only the Channel `enabled` flag and `updat
 
 ### 3.8 Test channel liveness
 
+CM-CH-TEST-1. The Channel liveness endpoint MUST behave as follows:
+
 - Method/Path: `POST /api/dashboard/providers/{provider_id}/channels/{channel_id}/test`
 - Body: `{ "model"?: string, "stream"?: boolean }`
-- If `stream` is omitted, it MUST default to `true`.
 - If `model` is provided, it MUST be a key in the Channel `models` object.
-- If `model` is omitted, use the Channel active probe model override, then Provider active probe model override, then global probe model, then the first Channel model key in lexicographic order.
-- The global probe model and request timeout MUST be read from one `monoize_runtime` snapshot. This endpoint MUST NOT read the settings database.
-- The upstream probe model MUST be the selected Channel model entry `redirect` when non-empty, otherwise the logical model key.
-- The effective API type is the first matching Provider `api_type_overrides[]` entry for the logical model, otherwise the Channel `provider_type`.
-- Replicate channels MUST be rejected for active completion probes.
-- Authentication for the probe request MUST match the effective API type:
-  - `gemini`: header `x-goog-api-key`
-  - `messages`: header `x-api-key`, header `Authorization: Bearer <api_key>`, and header `anthropic-version: 2023-06-01`
-  - all other probe types: `Authorization: Bearer <api_key>`
-- If `stream = true`, Responses, Chat Completions, Messages, and Gemini tests MUST send their protocol's streaming request form. A streaming test MUST read the upstream stream until a protocol terminal event is observed. HTTP success without a valid terminal event MUST return `success = false` and `error_code = "upstream_stream_missing_terminal"`.
-- The Responses probe body MUST set `max_output_tokens` to `16`. The Chat Completions and Messages probe bodies MUST set `max_tokens` to `16`. The Gemini probe body MUST set `generationConfig.maxOutputTokens` to `16`.
-- For a Responses streaming probe, a protocol terminal event is classified as follows:
-  1. `response.completed` is success.
-  2. `response.incomplete` is success when the event has no non-null `error` object at the top level and no non-null `response.error` object.
-  3. `response.failed` is failure.
-  4. `response.cancelled` is failure.
-  5. An `error` event is failure.
-  A JSON `null` `error` field is absent. Purpose: a reasoning model can consume the 16-token probe cap and terminate as `incomplete` with `incomplete_details.reason = "max_output_tokens"`. That outcome still proves the Channel is reachable.
-- If `stream = true` for an OpenAI Image, OpenRouter Image, Replicate, System One, or OpenAI Decisions Channel, return `400 invalid_request` because the liveness test does not define a streaming form for those Channel types.
+- If `model` is omitted, select the logical model using the Channel-level rule in `monoize-upstream-routing.spec.md` AHS-3, even for a per-model breaker. A configured probe model absent from `models` MUST fall back to the lexicographically smallest key, not cause a model-selection error.
+- Read global probe settings, global request transforms, and request timeout from one `monoize_runtime` snapshot. This endpoint MUST NOT read the settings database.
+- Resolve the initial upstream model, effective API type, and Chat dialect per AHS-3a.
+- Use Provider `request_timeout_ms_override` when non-null, else global `request_timeout_ms`, as one total timeout in milliseconds (AHS-3b).
+- For an effective completion-family API type, use the same request pipeline and outcome rules as the scheduler (AHS-4 and AHS-4a). When `stream` is present, use that boolean as the initial URP flag. When omitted, resolve the initial flag from the Channel override, Provider override, or global setting per CFG-3a. The shared encoder and decoder use the upstream mode after request transforms, not the initial flag.
+- For the effective native image and decision API types listed in AHS-4b, use the native non-streaming probe with Channel bearer authentication and without transforms. Do not consult the effective stream setting. An explicit `stream = true` remains invalid and MUST return HTTP `400` with code `invalid_request`.
+- Replicate Channels MUST be rejected for active completion tests.
 - A `system_one` probe MUST send `POST {base}/v1/systemone` with `state = "ping"` and one `noul` question. An `openai_decisions` probe MUST send `POST {base}/v1/decisions` with `input = "ping"` and one `predicate` question.
 - If `per_model_circuit_break = true`, a successful test MUST reset only the `{channel_id}::{resolved logical model}` health key. It MUST NOT reset the base Channel key or any sibling model key. If this model key does not exist and capacity remains, insert and reset this model key.
 - If `per_model_circuit_break = false`, a successful test MUST reset only the base Channel health key. If this key does not exist and capacity remains, insert and reset it.
-- A successful test MUST NOT inspect or mutate any other health-map key. Its health-map work MUST be `O(1)` and independent of Channel model count and global health entry count.
+- A successful test MUST apply the PHS-6 reset only if its captured routing configuration revision still matches. It MUST NOT inspect or mutate any other health-map key. Its health-map work MUST be `O(1)` and independent of Channel model count and global health entry count.
 - Response: `{ "success": boolean, "latency_ms": integer, "model": string, "stream": boolean, "http_status": integer | null, "error_code": string | null, "error_type": string | null, "error": string | null }`
-- On probe failure, `error` MUST identify the upstream outcome rather than a generic sentence:
+- On probe failure, `error` MUST identify the failure rather than a generic sentence:
   - HTTP non-2xx: `upstream returned {status} {reason}: {body}` where `{status}` is the
     numeric status (e.g. `500`, `503`), `{reason}` is the canonical reason phrase when
     known (e.g. `Service Unavailable`), and `{body}` is the upstream response body
     truncated to at most 512 bytes. An empty body omits the `: {body}` suffix.
   - Transport/connection failure: `connection failed: {detail}` using the underlying
     client error text.
-  - Stream decode or terminal failure: a concrete sentence that identifies the invalid event, decode failure, connection failure, idle timeout, or missing terminal condition.
+  - Decode or terminal failure: a concrete sentence that identifies the invalid response or event, decoder error, transport timeout, or missing terminal condition. Preserve the decoder's error code when provided, including `upstream_stream_missing_terminal` for a missing terminal event when the decoder reports that code.
+  - A request-phase transform or encoding failure MUST return `success = false` and identify the failed preparation step without reporting an upstream HTTP status.
   - `error` MUST NOT be the undifferentiated string
     `upstream returned non-2xx status or connection failed`.
 
@@ -511,7 +512,7 @@ CP-FE-7b. The Channel editor MUST expose `chat_dialect` as a Select immediately 
 
 CP-FE-7c. Each row of the Provider Protocol override editor MUST show a `chat_dialect` Select if and only if the row `api_type` is `chat_completion`. A new row MUST start with `api_type = chat_completion` and `chat_dialect = generic`. Changing a row `api_type` to `chat_completion` MUST set `generic` when the row value is empty. Changing it to any other value MUST set the row value to `null`.
 
-CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. The checkbox MUST be checked whenever a stream-capable Channel test dialog opens. It MUST be disabled and unchecked for a Channel type whose liveness test does not define streaming.
+CP-FE-8. The Channel liveness-test dialog MUST contain a `Stream response` checkbox. On open, initialize it to the Channel's effective probe stream value per CFG-3a when the dialog can test a model with an effective completion-family API type (AHS-4). The dialog MUST send the selected boolean explicitly for each such model test. It MUST NOT request streaming for a native image or decision probe (AHS-4b). When no model in the dialog supports streaming, the checkbox MUST be disabled and unchecked.
 
 CP-FE-9. The Channel liveness-test dialog MUST expose adjacent `Sequential test` and `Concurrent test` buttons. Sequential test MUST await each model before starting the next model. Concurrent test MUST run at most 5 requests at a time, and the concurrency limit MUST be shown next to the button ("并发 5"). Both actions MUST update each model row as its request completes.
 
@@ -527,6 +528,6 @@ CP-FE-11. A Provider overview model badge MUST use the following severity order:
 
 CP-FE-12. A Provider overview model-status detail overlay MUST open on hover or focus for a fine pointer and on tap for a coarse pointer. It MUST list every `breaker_channels` Channel name and every `unpriced_channels` Channel name. A red badge MUST state that zero of the eligible Channels are available.
 
-CP-FE-13. A Channel `unhealthy` status detail overlay MUST identify a Channel-level breaker when `per_model_circuit_break = false`. When `per_model_circuit_break = true`, it MUST list `_unhealthy_models`. A Channel `probing` status detail overlay MUST list `_probing_models`. Each overlay MUST show `_cooldown_until` when present.
+CP-FE-13. A Channel `unhealthy` status detail overlay MUST identify a Channel-level breaker when `per_model_circuit_break = false`. When `per_model_circuit_break = true`, it MUST list `_unhealthy_models`. The overlay MUST show `_next_recovery_at` when present. It MUST NOT present a probe due time as a guarantee of recovery.
 
 CP-FE-14. The Provider editor MUST expose `allow_free_when_unpriced_override` and `allow_free_when_missing_usage_override` as three-state selectors with options `Inherit global`, `On`, and `Off`, mapping to `null`, `true`, and `false`. Each description MUST state which global setting the `Inherit global` option follows.

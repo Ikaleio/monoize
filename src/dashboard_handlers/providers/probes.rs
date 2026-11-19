@@ -1,9 +1,11 @@
-use super::provider_pricing_model;
 use super::runtime::reset_channel_health_after_successful_test;
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
-use crate::monoize_routing::{MonoizeChannel, MonoizeProvider};
+use crate::handlers::channel_probe::{ProbeRequestSettings, prepare_channel_probe};
+use crate::monoize_routing::{
+    ChannelProbe, MonoizeChannel, MonoizeProvider, MonoizeProviderType, select_channel_probe_model,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -457,19 +459,9 @@ pub async fn test_channel(
         .find(|c| c.id == channel_id)
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "channel not found"))?;
 
-    let (requested_model, stream) = body
-        .map(|body| (body.model.clone(), body.stream.unwrap_or(true)))
-        .unwrap_or((None, true));
-
-    if let Some(model) = requested_model.as_ref()
-        && !channel.models.contains_key(model)
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "model is not supported by this channel",
-        ));
-    }
+    let (requested_model, requested_stream) = body
+        .map(|Json(body)| (body.model, body.stream))
+        .unwrap_or_default();
 
     if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
         return Err(AppError::new(
@@ -479,21 +471,24 @@ pub async fn test_channel(
         ));
     }
 
-    let (global_probe_model, request_timeout_ms) = {
+    let (probe, initial_stream, request_timeout_ms, settings) = {
         let runtime = state.monoize_runtime.read().await;
+        let probe = resolve_test_model(
+            &provider,
+            channel,
+            requested_model.as_deref(),
+            runtime.active_probe_model.as_deref(),
+            requested_stream,
+        )?;
+        let stream = probe.is_completion()
+            && requested_stream.unwrap_or_else(|| runtime.probe_stream(&provider, channel));
         (
-            runtime.active_probe_model.clone(),
-            runtime.request_timeout_ms,
+            probe,
+            stream,
+            runtime.request_timeout(&provider),
+            ProbeRequestSettings::from(&*runtime),
         )
     };
-
-    let (model_name, upstream_model) = resolve_test_model(
-        &provider,
-        channel,
-        requested_model,
-        global_probe_model,
-        stream,
-    )?;
 
     let started_at = std::time::Instant::now();
     // PX6: the connectivity test uses the channel's effective proxy resolution.
@@ -507,28 +502,35 @@ pub async fn test_channel(
                 format!("channel proxy_url cannot be used: {detail}"),
             )
         })?;
-    let outcome = crate::monoize_routing::probe_channel_completion(
+    let (stream, outcome) = match prepare_channel_probe(
+        &state,
         &test_http,
+        &provider,
         channel,
-        request_timeout_ms,
-        &upstream_model,
-        channel.provider_type,
-        &provider.api_type_overrides,
-        stream,
+        probe,
+        &settings,
+        initial_stream,
     )
-    .await;
+    .await
+    {
+        Ok(prepared) => (
+            prepared.is_stream(),
+            prepared.send(request_timeout_ms).await,
+        ),
+        Err(error) => (initial_stream, error.into_outcome()),
+    };
+    tracing::debug!(channel_id = %channel.id, provider = %provider.name, probe_model = %probe.logical_model, success = outcome.ok, "channel test probe result");
     let latency_ms = started_at.elapsed().as_millis() as u64;
 
     if outcome.ok {
-        let now = chrono::Utc::now().timestamp();
         let mut health = state.channel_health.lock().await;
         if state.routing_config_revision.load(Ordering::Acquire) == routing_config_revision {
             reset_channel_health_after_successful_test(
                 &mut health,
                 &channel_id,
                 provider.per_model_circuit_break,
-                &model_name,
-                now,
+                probe.logical_model,
+                chrono::Utc::now().timestamp(),
                 crate::monoize_routing::channel_health_max_entries(),
             );
         }
@@ -537,7 +539,7 @@ pub async fn test_channel(
     Ok(Json(json!({
         "success": outcome.ok,
         "latency_ms": latency_ms,
-        "model": model_name,
+        "model": probe.logical_model,
         "stream": stream,
         "http_status": outcome.http_status,
         "error_code": outcome.error_code,
@@ -648,57 +650,37 @@ fn websocket_probe_headers(
     ws_headers
 }
 
-fn resolve_test_model(
+fn resolve_test_model<'a>(
     provider: &MonoizeProvider,
-    channel: &MonoizeChannel,
-    requested_model: Option<String>,
-    global_probe_model: Option<String>,
-    stream: bool,
-) -> AppResult<(String, String)> {
-    let first_supported_model = channel.models.keys().min().cloned();
-
-    let probe_model = requested_model
-        .or_else(|| channel.active_probe_model_override.clone())
-        .or_else(|| provider.active_probe_model_override.clone())
-        .or(global_probe_model)
-        .or(first_supported_model);
-
-    let Some(model_name) = probe_model else {
+    channel: &'a MonoizeChannel,
+    requested_model: Option<&'a str>,
+    global_probe_model: Option<&str>,
+    requested_stream: Option<bool>,
+) -> AppResult<ChannelProbe<'a>> {
+    let model = requested_model
+        .or_else(|| select_channel_probe_model(provider, channel, global_probe_model))
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "no model available for testing; specify a model or add models to this provider",
+            )
+        })?;
+    let probe = ChannelProbe::for_model(provider, channel, model).ok_or_else(|| {
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "model is not supported by this channel",
+        )
+    })?;
+    if probe.provider_type == MonoizeProviderType::Replicate {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "no model available for testing; specify a model or add models to this provider",
-        ));
-    };
-    if !channel.models.contains_key(&model_name) {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "resolved probe model is not supported by this channel",
+            "replicate channels do not support completion probe tests",
         ));
     }
-
-    let upstream_model = channel
-        .models
-        .get(&model_name)
-        .map(|entry| provider_pricing_model(&model_name, entry).to_string())
-        .unwrap_or_else(|| model_name.clone());
-
-    let effective_type = crate::monoize_routing::resolve_effective_api_type(
-        &provider.api_type_overrides,
-        channel.provider_type,
-        &model_name,
-    );
-    if stream
-        && matches!(
-            effective_type,
-            crate::monoize_routing::MonoizeProviderType::OpenaiImage
-                | crate::monoize_routing::MonoizeProviderType::OpenrouterImage
-                | crate::monoize_routing::MonoizeProviderType::Replicate
-                | crate::monoize_routing::MonoizeProviderType::SystemOne
-                | crate::monoize_routing::MonoizeProviderType::OpenaiDecisions
-        )
-    {
+    if requested_stream == Some(true) && !probe.is_completion() {
         return Err(AppError::new(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -706,5 +688,5 @@ fn resolve_test_model(
         ));
     }
 
-    Ok((model_name, upstream_model))
+    Ok(probe)
 }

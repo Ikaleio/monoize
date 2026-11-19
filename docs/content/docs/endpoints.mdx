@@ -75,6 +75,8 @@ Each `chat_completion` Channel stores one dialect in its `chat_dialect` setting.
 - A retry on another Channel uses the dialect of that Channel.
 - A Protocol override that selects `chat_completion` has its own dialect. That value replaces the Channel dialect for models that match the rule.
 - `generic` follows OpenRouter-compatible behavior. A strict relay can reject its extension fields. Select another dialect for that Channel.
+- On `openrouter`, Monoize sends tool-result images and files as items in the tool message's `content` array. It preserves the order of text and media items. Public HTTP(S) file URLs go in `file.file_data` in both user messages and tool results.
+- Other Chat dialects cannot send tool-result images, files that do not expand to text, or file URLs. Monoize skips that attempt without sending the request upstream. It tries the next eligible Channel or Provider within the retry limits.
 - A Chat client keeps its own output-token field name, except on `deepseek`. The table applies to other clients.
 - Effort uses `reasoning_effort`, including `none`. If a request has both fields, `reasoning.effort` takes precedence over `reasoning_effort`.
 - A native Chat `reasoning` object reaches `openrouter`, `vercel`, and `generic` upstreams only. `openai` and `deepseek` upstreams do not receive it.

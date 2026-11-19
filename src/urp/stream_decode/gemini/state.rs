@@ -7,8 +7,8 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, parse_usage_from_gemini_object,
     record_observed_upstream_response_model, record_stream_done_sentinel,
-    record_stream_terminal_error, record_stream_terminal_event, record_stream_usage_if_present,
-    record_visible_stream_event_delta,
+    record_stream_terminal_event, record_stream_upstream_terminal_error,
+    record_stream_usage_if_present, record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::decode::gemini::{
@@ -496,7 +496,7 @@ impl<'a> GeminiStreamState<'a> {
             })
             .await
             .is_ok();
-        record_stream_terminal_error(
+        record_stream_upstream_terminal_error(
             &self.runtime_metrics,
             "error",
             StreamTerminalError {
@@ -509,6 +509,8 @@ impl<'a> GeminiStreamState<'a> {
                     .map(str::to_owned),
                 param: None,
             },
+            error.get("code").and_then(Value::as_str),
+            error.get("type").and_then(Value::as_str),
         )
         .await;
         AppError::new(StatusCode::BAD_GATEWAY, code, message)

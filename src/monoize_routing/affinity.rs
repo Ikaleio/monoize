@@ -1,6 +1,3 @@
-pub(super) const SESSION_CACHE_HEADER_NAMES: &[&str] =
-    &["x-session-affinity", "x-opencode-session"];
-
 /// CM-AFF-0: null `session_affinity_auto` enables affinity for these URLs.
 pub(crate) fn default_session_affinity_auto(base_url: &str) -> bool {
     is_direct_cloudflare_workers_ai_url(base_url) || is_direct_opencode_zen_url(base_url)
@@ -30,7 +27,7 @@ fn is_direct_cloudflare_workers_ai_url(base_url: &str) -> bool {
 }
 
 /// CM-AFF-0b: `https://opencode.ai/zen` and paths under `/zen/`.
-pub(super) fn is_direct_opencode_zen_url(base_url: &str) -> bool {
+pub(crate) fn is_direct_opencode_zen_url(base_url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
         return false;
     };

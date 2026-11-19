@@ -24,7 +24,7 @@ organized by administrative intent, with these stable ids, in this order:
 | 2 | `access` | `settings.categoryAccess` | `registration_enabled`, `captcha_enabled`, `session_ttl_days`, `api_key_max_per_user` |
 | 3 | `models` | `settings.categoryModels` | `codex_model_ids`, `reasoning_suffix_map`, `global_model_redirects` |
 | 4 | `transforms` | `settings.categoryTransforms` | `global_transforms` |
-| 5 | `routing` | `settings.categoryRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds`, `monoize_active_probe_enabled`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_timeout_ms`, `monoize_stream_idle_timeout_ms` |
+| 5 | `routing` | `settings.categoryRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_active_probe_stream`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_honor_rate_limit`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_timeout_ms`, `monoize_stream_idle_timeout_ms` |
 | 6 | `billing` | `settings.categoryBilling` | `monoize_enable_estimated_billing`, `allow_free_when_unpriced`, `allow_free_when_missing_usage` |
 | 7 | `privacy` | `settings.categoryPrivacy` | `monoize_request_capture_enabled`, `monoize_request_capture_max_total_bytes`, `monoize_mask_sensitive_info` |
 | 8 | `compatibility` | `settings.categoryCompatibility` | `monoize_extra_fields_whitelist` (sub-keys `chat_completion`, `responses`, `messages`, `gemini`), `monoize_strip_cross_protocol_nested_extra` |
@@ -118,6 +118,18 @@ SSU-3b. `recharge_public_origin` renders as one text input in the `site` group.
 Its value constraint, default, and rejection behavior are defined by
 `recharge-system.spec.md` RC-G1; the field description MUST state that order
 creation requires a non-empty value.
+
+SSU-3c. The settings from `monoize-upstream-routing.spec.md` CFG-3 MUST render in
+the Active Probe group (`routing.probe`). Render `monoize_active_probe_stream` as a
+switch that defaults to on. In the Passive Breaker group (`routing.passive`), render
+`monoize_honor_rate_limit` as a switch immediately before
+`monoize_passive_rate_limit_cooldown_seconds`. The switch defaults to off. Its
+description MUST state that this setting controls whether HTTP 429 and other rate-limit
+trips wait the rate-limit cooldown or a longer Retry-After before the first probe or
+timed recovery. The `monoize_passive_cooldown_seconds` description MUST state that this
+setting sets the timed-recovery wait for Replicate Channels and Channels on replica
+nodes. It MUST also state that timed recovery uses this wait for rate-limit trips when
+honor-rate-limit is off.
 
 ## 2. Page layout
 
@@ -379,6 +391,13 @@ SSU-26. `GET` and `PUT /api/dashboard/settings` MUST NOT contain `default_user_r
 `monoize_passive_min_samples`, or `monoize_passive_failure_rate_threshold`. `PUT` ignores
 these keys when a client still sends them. A migration deletes their `system_settings` rows,
 and startup MUST NOT reseed them.
+
+SSU-26a. `GET /api/dashboard/settings` MUST return both `monoize_honor_rate_limit`
+and `monoize_active_probe_stream` as booleans. Their defaults are `false` and `true`,
+respectively. `PUT` MUST accept a boolean for each field and preserve its current value
+when that field is omitted. The former
+`monoize_active_probe_enabled` switch is removed from the page, API, and storage.
+Do not interpret that key in a `PUT` payload or reseed it on startup (CFG-4, ISM4.11b).
 
 SSU-27. Invalid `PUT /api/dashboard/settings` values MUST return HTTP 400 with code
 `invalid_request` and `param` naming the offending field:

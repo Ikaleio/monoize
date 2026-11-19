@@ -6,6 +6,7 @@ use super::thinking::{encode_thinking_controls, validate_generated_thinking_cont
 use super::tools::{encode_tool_choice, encode_tools, prepare_schema_custom_tools};
 use crate::urp::cache_breakpoint::{CacheWireTarget, materialize_wire_markers};
 use crate::urp::encode::merge_extra;
+use crate::urp::media::MediaError;
 use crate::urp::{
     MESSAGES_OUTPUT_CONFIG_EXTRA_KEY, MESSAGES_THINKING_CONFIG_EXTRA_KEY, ProviderProtocol,
     ResponseFormat, StopControl, UrpRequest,
@@ -15,14 +16,14 @@ use serde_json::{Map, Value, json};
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     match prepare_request(req, upstream_model) {
         Ok(prepared) => encode_prepared_request(&prepared, upstream_model),
-        Err(message) => messages_media_error_body(&message),
+        Err(error) => messages_media_error_body(error.message()),
     }
 }
 
 /// Encodes one Messages request and rejects provider-invalid thinking controls that Monoize
 /// generated before the caller can dispatch the body upstream. Explicit client Messages
 /// controls are forwarded unvalidated (RC4d, RC4f).
-pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
+pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, MediaError> {
     let prepared = prepare_request(req, upstream_model)?;
     validate_complete_tool_inputs(&prepared.input)?;
     let body = encode_prepared_request(&prepared, upstream_model);
@@ -43,7 +44,7 @@ pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<
     Ok(body)
 }
 
-fn prepare_request(req: &UrpRequest, upstream_model: &str) -> Result<UrpRequest, String> {
+fn prepare_request(req: &UrpRequest, upstream_model: &str) -> Result<UrpRequest, MediaError> {
     let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Messages)?;
     prepare_schema_custom_tools(&mut prepared)?;
     materialize_wire_markers(&mut prepared, CacheWireTarget::Messages, upstream_model);

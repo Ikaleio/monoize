@@ -113,7 +113,7 @@ fn apply_client_gone_if_needed(log: &mut InsertRequestLog, client_gone: bool) {
     log.error_http_status = Some(499);
 }
 
-fn apply_usage_fields(log: &mut InsertRequestLog, usage: Option<&urp::Usage>) {
+pub(crate) fn apply_usage_fields(log: &mut InsertRequestLog, usage: Option<&urp::Usage>) {
     if let Some(usage) = usage {
         let usage = usage.accounting();
         log.input_tokens = Some(usage.input_tokens);

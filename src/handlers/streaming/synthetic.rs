@@ -67,6 +67,7 @@ impl StreamForward {
         let mut upstream_body =
             match encode_request_for_provider(&mut nonstream_req, attempt, downstream) {
                 Ok(body) => body,
+                Err(err) if err.target_capability => return Err(err),
                 Err(err) => return Err(self.fail_request(attempt, err)),
             };
         enforce_ws_encrypted_include(

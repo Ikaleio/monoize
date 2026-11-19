@@ -1,9 +1,10 @@
+use crate::urp::media::MediaError;
 use crate::urp::{
     ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest, is_internal_key,
 };
 use serde_json::{Map, Value, json};
 
-pub fn encode_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
+pub fn encode_request(req: &UrpRequest, model: &str) -> Result<Value, MediaError> {
     if let Some(options) = &req.image_generation {
         options.validate()?;
     }
@@ -68,7 +69,7 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
             continue;
         };
         if metadata.image_mask {
-            return Err("OpenRouter Images does not support image masks".to_string());
+            return Err("OpenRouter Images does not support image masks".into());
         }
         let url = match source {
             ImageSource::Url { url, .. } => url.clone(),
@@ -76,7 +77,7 @@ pub fn encode_request(req: &UrpRequest, model: &str) -> Result<Value, String> {
                 format!("data:{media_type};base64,{data}")
             }
             ImageSource::FileId { .. } => {
-                return Err("OpenRouter Images does not support file_id image inputs".to_string());
+                return Err("OpenRouter Images does not support file_id image inputs".into());
             }
         };
         references.push(json!({"type": "image_url", "image_url": {"url": url}}));

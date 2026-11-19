@@ -135,6 +135,7 @@ impl NonstreamRun<'_> {
         .await
         {
             Ok(stream_call) => stream_call,
+            Err(err) if err.target_capability => return Err(err),
             Err(err) => return Err(self.fail_request(attempt, err).await),
         };
         call.path = stream_call.path;
@@ -190,13 +191,17 @@ impl NonstreamRun<'_> {
                         ),
                     );
                 }
-                urp::encode::openai_image::form_from_fields(fields)
+                urp::encode::openai_image::form_from_fields(fields).map_err(Into::into)
             });
         let form = match form {
             Ok(form) => form,
-            Err(message) => {
-                let err = AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message);
-                return Err(self.fail_request(attempt, err).await);
+            Err(error) => {
+                let err = upstream_encode_error("invalid_request", error);
+                return Err(if err.target_capability {
+                    err
+                } else {
+                    self.fail_request(attempt, err).await
+                });
             }
         };
         release_encoded_input(&mut call.req, &self.inputs.capture);
@@ -272,6 +277,7 @@ async fn collect_streamed_upstream_response(
     logical_model: &str,
     stream_idle_timeout_ms: u64,
 ) -> Result<(urp::UrpResponse, Option<String>), CollectedUpstreamError> {
+    let retry_after_seconds = upstream::parse_retry_after(upstream_resp.headers(), now_ts());
     let (decoded_tx, mut decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
     let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
     let decode_handle = {
@@ -344,7 +350,12 @@ async fn collect_streamed_upstream_response(
                 e.to_string(),
             ))
         })?
-        .map_err(CollectedUpstreamError::Upstream)?;
+        .map_err(|mut error| {
+            if stream_error.is_none() {
+                error.retry_after_seconds = retry_after_seconds;
+            }
+            CollectedUpstreamError::Upstream(error)
+        })?;
     if let Some(err) = stream_error {
         return Err(CollectedUpstreamError::Upstream(err));
     }
@@ -352,10 +363,12 @@ async fn collect_streamed_upstream_response(
     final_response
         .map(|response| (response, observed_response_model))
         .ok_or_else(|| {
-            CollectedUpstreamError::Upstream(AppError::new(
+            let mut error = AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "upstream_stream_error",
                 "stream completed without terminal response",
-            ))
+            );
+            error.retry_after_seconds = retry_after_seconds;
+            CollectedUpstreamError::Upstream(error)
         })
 }

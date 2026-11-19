@@ -58,6 +58,38 @@ const STREAM_TEST_SUPPORTED: Record<ProviderType, boolean> = {
 	openai_decisions: false
 }
 
+// AT-1 matches the whole logical model, with `?` consuming one Unicode code point.
+function matchesModelGlob(pattern: string, model: string): boolean {
+	const tokens = [...pattern]
+	const chars = [...model]
+	let token = 0
+	let char = 0
+	let star = -1
+	let starEnd = 0
+	while (char < chars.length) {
+		if (tokens[token] === '*') {
+			star = token++
+			starEnd = char
+		} else if (tokens[token] === '?' || tokens[token] === chars[char]) {
+			token++
+			char++
+		} else if (star !== -1) {
+			token = star + 1
+			char = ++starEnd
+		} else {
+			return false
+		}
+	}
+	while (tokens[token] === '*') token++
+	return token === tokens.length
+}
+
+function supportsStream(target: ChannelTestTarget, model: string): boolean {
+	if (target.providerType === 'replicate') return false
+	const override = target.apiTypeOverrides.find(rule => matchesModelGlob(rule.pattern, model))
+	return STREAM_TEST_SUPPORTED[override?.api_type ?? target.providerType]
+}
+
 /**
  * CP-FE-9a: page-level owner of Channel test runs. Results survive closing the
  * dialog, and a run keeps going in the background until it finishes or is stopped.
@@ -111,7 +143,7 @@ export function ChannelTestProvider({ children }: { children: React.ReactNode })
 			if (controller.signal.aborted) return
 			setResult(channelId, model, { status: 'testing' })
 			try {
-				const result = await api.testChannel(runTarget.providerId, channelId, model, stream, controller.signal)
+				const result = await api.testChannel(runTarget.providerId, channelId, model, stream && supportsStream(runTarget, model), controller.signal)
 				setResult(channelId, model, {
 					status: result.success ? 'passed' : 'failed',
 					latency_ms: result.latency_ms,
@@ -188,8 +220,8 @@ function ChannelTestDialog({
 }) {
 	const { t } = useTranslation()
 	const { runs, start, stop } = useChannelTests()
-	const streamCapable = STREAM_TEST_SUPPORTED[target.providerType]
-	const [stream, setStream] = useState(streamCapable)
+	const streamCapable = useMemo(() => target.models.some(model => supportsStream(target, model)), [target])
+	const [stream, setStream] = useState(streamCapable && target.initialStream)
 	const run = runs[target.channelId]
 	const results = run?.results ?? EMPTY_RESULTS
 	const running = run?.running ?? null

@@ -10,7 +10,7 @@ mod store;
 mod types;
 mod validation;
 
-pub(crate) use affinity::default_session_affinity_auto;
+pub(crate) use affinity::{default_session_affinity_auto, is_direct_opencode_zen_url};
 pub use probe::*;
 pub use runtime::*;
 pub use store::MonoizeRoutingStore;

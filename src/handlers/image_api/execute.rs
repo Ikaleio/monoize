@@ -28,7 +28,7 @@ pub(super) async fn execute_stream_collected_image_typed(
 ) -> AppResult<(urp::UrpResponse, String)> {
     let (execution, attempts) = prepare_image_execution(context, req).await?;
     let mut driver = AttemptDriver::new(attempts);
-    while let Some(mut slot) = driver.next() {
+    while let Some(mut slot) = driver.next(execution.context.state).await {
         execution.context.task_state.set_attempt(&slot.attempt);
         let mut prepared = match execution.prepare_attempt(&slot.attempt).await {
             Ok(prepared) => prepared,
@@ -58,6 +58,12 @@ pub(super) async fn execute_stream_collected_image_typed(
         .await
         {
             Ok(call) => call,
+            Err(error) if error.target_capability => {
+                driver
+                    .fail(execution.context.state, slot, &error, None)
+                    .await;
+                continue;
+            }
             Err(error) => {
                 return Err(execution
                     .finish_error(&slot.attempt, error, driver.tried_providers)

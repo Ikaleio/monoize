@@ -1,5 +1,6 @@
 use crate::urp::decode::{
-    deserialize_u64ish_default, retain_wire_extra_fields, split_extra, value_to_u64,
+    deserialize_u64ish_default, deserialize_u64ish_optional, retain_wire_extra_fields, split_extra,
+    value_to_u64,
 };
 use crate::urp::{InputDetails, OutputDetails, Usage};
 use serde::Deserialize;
@@ -8,10 +9,10 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize)]
 struct OpenAiChatUsage {
-    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
-    prompt_tokens: u64,
-    #[serde(default, deserialize_with = "deserialize_u64ish_default")]
-    completion_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish_optional")]
+    prompt_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_u64ish_optional")]
+    completion_tokens: Option<u64>,
     #[serde(default)]
     prompt_tokens_details: Option<OpenAiChatInputDetails>,
     #[serde(default)]
@@ -180,8 +181,9 @@ impl From<OpenAiChatUsage> for Usage {
 
         Usage {
             iterations: None,
-            input_tokens: prompt_tokens,
-            output_tokens: completion_tokens,
+            reported_token_counts: prompt_tokens.is_some() && completion_tokens.is_some(),
+            input_tokens: prompt_tokens.unwrap_or(0),
+            output_tokens: completion_tokens.unwrap_or(0),
             input_details,
             output_details,
             extra_body: extra,
@@ -208,15 +210,17 @@ pub(crate) fn parse_chat_usage(obj: &Map<String, Value>) -> Usage {
     super::super::normalize_openai_usage_details(&mut obj);
     serde_json::from_value::<OpenAiChatUsage>(Value::Object(obj.clone()))
         .map(Usage::from)
-        .unwrap_or_else(|_| Usage {
-            iterations: None,
-            input_tokens: obj.get("prompt_tokens").and_then(value_to_u64).unwrap_or(0),
-            output_tokens: obj
-                .get("completion_tokens")
-                .and_then(value_to_u64)
-                .unwrap_or(0),
-            input_details: None,
-            output_details: None,
-            extra_body: split_extra(&obj, &[]),
+        .unwrap_or_else(|_| {
+            let input_tokens = obj.get("prompt_tokens").and_then(value_to_u64);
+            let output_tokens = obj.get("completion_tokens").and_then(value_to_u64);
+            Usage {
+                iterations: None,
+                reported_token_counts: input_tokens.is_some() && output_tokens.is_some(),
+                input_tokens: input_tokens.unwrap_or(0),
+                output_tokens: output_tokens.unwrap_or(0),
+                input_details: None,
+                output_details: None,
+                extra_body: split_extra(&obj, &[]),
+            }
         })
 }

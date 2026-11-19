@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { ProviderType } from '@/lib/api'
+import type { ApiTypeOverride, ProviderType } from '@/lib/api'
 
 // CP-FE-9: client-side concurrency cap for "concurrent" runs, shown in the UI.
 export const CHANNEL_TEST_CONCURRENCY = 5
@@ -27,6 +27,8 @@ export type ChannelTestTarget = {
 	channelId: string
 	channelName: string
 	providerType: ProviderType
+	apiTypeOverrides: ApiTypeOverride[]
+	initialStream: boolean
 	models: string[]
 }
 

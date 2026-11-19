@@ -30,6 +30,7 @@ impl NonstreamRun<'_> {
         };
         let upstream_body = match encode_request_for_provider(&mut req, attempt, downstream) {
             Ok(body) => body,
+            Err(err) if err.target_capability => return Err(err),
             Err(err) => return Err(self.fail_request(attempt, err).await),
         };
         let responses_echo = responses_request_echo_for_attempt(&req, attempt, downstream);
@@ -97,24 +98,44 @@ pub(in crate::handlers) fn shape_request_for_attempt(
     auth: &crate::auth::AuthResult,
     downstream: DownstreamProtocol,
 ) -> AppResult<()> {
-    if matches!(downstream, DownstreamProtocol::Responses)
-        || attempt.provider_type == ProviderType::Gemini
+    shape_upstream_request(
+        req,
+        attempt.provider_type,
+        &attempt.upstream_model,
+        attempt.strip_cross_protocol_nested_extra,
+        Some(auth),
+        Some(downstream),
+    )
+}
+
+pub(in crate::handlers) fn shape_upstream_request(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+    upstream_model: &str,
+    strip_nested_extra: bool,
+    auth: Option<&crate::auth::AuthResult>,
+    downstream: Option<DownstreamProtocol>,
+) -> AppResult<()> {
+    if matches!(downstream, Some(DownstreamProtocol::Responses))
+        || provider_type == ProviderType::Gemini
     {
-        promote_responses_additional_tools(req, attempt.provider_type);
+        promote_responses_additional_tools(req, provider_type);
     }
-    if let Some(target_protocol) = provider_type_protocol(attempt.provider_type) {
+    if let Some(target_protocol) = provider_type_protocol(provider_type) {
         urp::retain_provider_items_for_protocol(&mut req.input, target_protocol);
         if target_protocol == urp::ProviderProtocol::Responses {
             urp::remove_downstream_only_reasoning_for_responses(&mut req.input);
         }
     }
-    if attempt.strip_cross_protocol_nested_extra
-        && !downstream.is_same_family(attempt.provider_type)
+    if strip_nested_extra
+        && !downstream.is_some_and(|protocol| protocol.is_same_family(provider_type))
     {
         urp::strip_nested_extra_body(&mut req.input);
     }
-    inject_monoize_context(auth, req);
-    req.model = attempt.upstream_model.clone();
+    if let Some(auth) = auth {
+        inject_monoize_context(auth, req);
+    }
+    upstream_model.clone_into(&mut req.model);
     // Unwrap mz2 reasoning envelopes BEFORE any request-phase transform
     // observes the request input. Per spec/urp-transform-system.spec.md
     // PIPE-1 step 7 and PIPE-1d, transforms must not see encrypted
@@ -124,9 +145,9 @@ pub(in crate::handlers) fn shape_request_for_attempt(
     // replayed reasoning node for this attempt.
     urp::filter_and_unwrap_reasoning_envelopes_for_upstream(
         &mut req.input,
-        reasoning_envelope_provider_type(attempt.provider_type),
+        reasoning_envelope_provider_type(provider_type),
         &req.model,
-        auth.reasoning_envelope_enabled,
+        auth.is_some_and(|auth| auth.reasoning_envelope_enabled),
     )
     .map_err(reasoning_envelope_io_error)
 }

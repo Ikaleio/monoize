@@ -1,5 +1,5 @@
 mod probes;
-mod runtime;
+pub(super) mod runtime;
 
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
@@ -13,9 +13,8 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use runtime::{
-    ProviderModelRuntimeStatus, advance_routing_config_revision,
+    ProviderModelRuntimeStatus, advance_routing_config_revision, apply_provider_runtime,
     build_provider_model_runtime_statuses, provider_with_runtime, prune_provider_channel_affinity,
-    prune_provider_channel_health,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -109,7 +108,7 @@ pub async fn list_providers(
         .collect();
 
     let mut out = Vec::with_capacity(providers.len());
-    for provider in providers {
+    for mut provider in providers {
         let mut unpriced_model_ids = Vec::new();
         let mut unpriced_entries = HashSet::new();
         for channel in &provider.channels {
@@ -128,11 +127,15 @@ pub async fn list_providers(
         }
         unpriced_model_ids.sort();
         unpriced_model_ids.dedup();
-        let p = provider_with_runtime(&state, provider).await;
-        let model_runtime_statuses = build_provider_model_runtime_statuses(&p, &unpriced_entries);
-        let usage = live_usage.get(&p.id).copied().unwrap_or_default();
+        let model_runtime_statuses = {
+            let health = state.channel_health.lock().await;
+            let now = chrono::Utc::now().timestamp();
+            apply_provider_runtime(&mut provider, &health, now);
+            build_provider_model_runtime_statuses(&provider, &unpriced_entries, &health, now)
+        };
+        let usage = live_usage.get(&provider.id).copied().unwrap_or_default();
         out.push(ProviderListEntry {
-            provider: p,
+            provider,
             live_usage: json!({
                 "window_seconds": crate::users::LIVE_USAGE_WINDOW_SECONDS,
                 "rpm": usage.rpm,
@@ -237,7 +240,7 @@ pub async fn create_provider(
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
-    advance_routing_config_revision(&state);
+    advance_routing_config_revision(&state, &[]).await;
 
     Ok((
         StatusCode::CREATED,
@@ -287,8 +290,7 @@ pub async fn update_provider(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    advance_routing_config_revision(&state);
-    prune_provider_channel_health(&state, &affected_channel_ids).await;
+    advance_routing_config_revision(&state, &affected_channel_ids).await;
     prune_provider_channel_affinity(&state, &affected_channel_ids).await;
 
     Ok(Json(provider_with_runtime(&state, provider).await))
@@ -325,8 +327,7 @@ pub async fn delete_provider(
         .iter()
         .map(|ch| ch.id.clone())
         .collect();
-    advance_routing_config_revision(&state);
-    prune_provider_channel_health(&state, &removed_channel_ids).await;
+    advance_routing_config_revision(&state, &removed_channel_ids).await;
     prune_provider_channel_affinity(&state, &removed_channel_ids).await;
 
     Ok(Json(json!({ "success": true })))
@@ -345,7 +346,7 @@ pub async fn reorder_providers(
         .await
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))?;
 
-    advance_routing_config_revision(&state);
+    advance_routing_config_revision(&state, &[]).await;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -364,19 +365,15 @@ pub async fn set_channel_enabled(
 ) -> AppResult<impl IntoResponse> {
     require_admin(&headers, &state).await?;
 
-    let updated = state
+    let changed = state
         .monoize_store
         .set_channel_enabled(&provider_id, &channel_id, body.enabled)
         .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-    if !updated {
-        return Err(AppError::new(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "channel not found",
-        ));
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "not_found", "channel not found"))?;
+    if changed {
+        advance_routing_config_revision(&state, &[channel_id]).await;
     }
-    advance_routing_config_revision(&state);
 
     let provider = state
         .monoize_store

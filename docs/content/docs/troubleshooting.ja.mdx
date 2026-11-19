@@ -34,7 +34,7 @@ description: 認証・ルーティング・課金・ストリーミングの一�
 2. **トランスポート障害。** メッセージが `failed to request upstream` です。Channel の base URL とプロキシを確認します。
 3. **ルートが存在しない。** 有効な Provider が、モデルをマッピングした有効かつ重み 0 超の Channel を 1 つ以上持つことを確認します。
 4. **グループが交差しない。** キーのグループは Provider と少なくとも 1 つのグループを共有する必要があります。[API キー](/ja/docs/dashboard/api-keys)を参照してください。
-5. **すべての Channel が不健全。** サーキットブレーカーはクールダウン中の不健全な Channel をスキップします。ログ行の失敗試行を読み、根本の上流エラーを特定します。
+5. **他のルーティング条件を満たす Channel がすべて異常。** サーキットブレーカーが有効な場合、Monoize は異常な Channel にトラフィックを転送しません。プローブの連続成功回数がしきい値に達するか、ダッシュボードのテストが成功するか、復帰までの待機時間が過ぎると、転送を再開できます。ログで失敗した試行を確認し、上流のエラーを特定してください。
 6. **倍率上限。** `max_multiplier` を設定したキーは、上限を超える価格のモデルエントリをスキップします。
 
 ### その他の上流ステータスとコード
@@ -44,6 +44,13 @@ description: 認証・ルーティング・課金・ストリーミングの一�
 ### `400 unsupported_tool`
 
 リクエストが `openrouter:*` ツール、または Chat エンコードのない他のツールタイプを、それを表現できない Chat ダイアレクトへ送っています。ツールを削除するか、モデルを `openrouter` または `generic` ダイアレクトの Channel へルーティングします。[API エンドポイント](/ja/docs/endpoints)を参照してください。
+
+### Chat のツール結果で `400 unsupported_media` が返る
+
+- `Chat tool results support text only; image content cannot be discarded.`
+- `Chat tool results support text only; file content cannot be discarded.`
+
+選択された Chat ダイアレクトでは、ツール結果の画像やファイルを送れません。Monoize はその試行でリクエストを上流に送らず、試行回数の上限内で次の条件を満たす Channel または Provider を試します。対応するルートがない場合は、その内容を送れる Channel にモデルをルーティングしてください。たとえば、`openrouter` ダイアレクトを使う Chat Channel や、対応する Responses、Messages、Gemini の Channel を選んでください。対応可否はメディアの形式と取得元によって異なります。
 
 ### 組み込みツールが効かない
 

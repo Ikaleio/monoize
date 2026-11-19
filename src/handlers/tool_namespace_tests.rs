@@ -29,11 +29,7 @@ fn request() -> urp::UrpRequest {
 fn namespace_messages_custom_patch_roundtrip() {
     let mut req = request();
     promote_responses_additional_tools(&mut req, ProviderType::Messages);
-    filter_tools_for_provider(
-        &mut req,
-        ProviderType::Messages,
-        DownstreamProtocol::Responses,
-    );
+    filter_tools_for_provider(&mut req, ProviderType::Messages, false);
     let tools = req.tools.as_ref().unwrap();
     assert_eq!(tools.len(), 3);
     let aliases = tool_namespace_aliases(&req);
@@ -163,11 +159,7 @@ fn namespace_native_responses_retains_named_choice() {
     let mut req = request();
     let original = serde_json::to_value(&req).unwrap();
     promote_responses_additional_tools(&mut req, ProviderType::Responses);
-    filter_tools_for_provider(
-        &mut req,
-        ProviderType::Responses,
-        DownstreamProtocol::Responses,
-    );
+    filter_tools_for_provider(&mut req, ProviderType::Responses, true);
     assert_eq!(serde_json::to_value(&req).unwrap(), original);
     let wire = urp::encode::openai_responses::encode_request(&req, "gpt-6-astra");
     assert_eq!(wire["tools"][1]["type"], "namespace");
@@ -205,11 +197,7 @@ fn canonical_allowed_tools_namespace_selector_is_bridged() {
 fn gemini_function_namespaces_use_collision_free_aliases() {
     let mut request=urp::decode::openai_responses::decode_request(&json!({"model":"gemini","input":[{"type":"function_call","call_id":"c","namespace":"one","name":"f","arguments":"{}"}],"tools":[{"type":"namespace","name":"one","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]},{"type":"namespace","name":"two","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]}]})).unwrap();
     promote_responses_additional_tools(&mut request, ProviderType::Gemini);
-    filter_tools_for_provider(
-        &mut request,
-        ProviderType::Gemini,
-        DownstreamProtocol::Responses,
-    );
+    filter_tools_for_provider(&mut request, ProviderType::Gemini, false);
     let aliases = tool_namespace_aliases(&request);
     assert_eq!(aliases.len(), 2);
     let encoded = urp::encode::gemini::encode_request(&request, "gemini");

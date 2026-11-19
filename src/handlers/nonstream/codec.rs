@@ -47,22 +47,35 @@ pub(in crate::handlers) fn encode_request_for_provider(
             req.extra_body.remove("store");
         }
     }
-    filter_extra_body_for_provider(
+    encode_upstream_request(
         req,
         attempt.provider_type,
-        downstream,
+        &attempt.logical_model,
+        attempt.chat_dialect,
         &attempt.extra_fields_whitelist,
-    );
-    if attempt.provider_type == ProviderType::Responses
-        && !matches!(downstream, DownstreamProtocol::Responses)
+        Some(downstream),
+    )
+}
+
+pub(in crate::handlers) fn encode_upstream_request(
+    req: &mut urp::UrpRequest,
+    provider_type: ProviderType,
+    logical_model: &str,
+    chat_dialect: urp::encode::openai_chat::ChatDialect,
+    extra_fields_whitelist: &Option<Vec<String>>,
+    downstream: Option<DownstreamProtocol>,
+) -> AppResult<Value> {
+    let same_family = downstream.is_some_and(|protocol| protocol.is_same_family(provider_type));
+    filter_extra_body_for_provider(req, provider_type, same_family, extra_fields_whitelist);
+    if provider_type == ProviderType::Responses
+        && downstream.is_some_and(|protocol| !matches!(protocol, DownstreamProtocol::Responses))
     {
         apply_cross_family_responses_controls(req);
     }
-    filter_tools_for_provider(req, attempt.provider_type, downstream);
-    if attempt.provider_type == ProviderType::Responses
+    filter_tools_for_provider(req, provider_type, same_family);
+    if provider_type == ProviderType::Responses
         && req.image_generation.is_some()
-        && (attempt.logical_model.starts_with("gpt-image-")
-            || attempt.logical_model == "chatgpt-image-latest")
+        && (logical_model.starts_with("gpt-image-") || logical_model == "chatgpt-image-latest")
     {
         for tool in req
             .tools
@@ -75,46 +88,36 @@ pub(in crate::handlers) fn encode_request_for_provider(
             {
                 config
                     .entry("model")
-                    .or_insert_with(|| json!(attempt.logical_model));
+                    .or_insert_with(|| json!(logical_model));
             }
         }
     }
-    let stateful_same_responses = matches!(downstream, DownstreamProtocol::Responses)
-        && attempt.provider_type == ProviderType::Responses
+    let stateful_same_responses = same_family
+        && provider_type == ProviderType::Responses
         && has_responses_state_reference(req);
     if !stateful_same_responses {
         strip_orphaned_tool_calls(req);
     }
     let model = req.model.clone();
-    let value = match attempt.provider_type {
-        ProviderType::Responses => urp::encode::openai_responses::encode_request_checked(
-            req, &model,
-        )
-        .map_err(|message| AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message))?,
+    let value = match provider_type {
+        ProviderType::Responses => {
+            urp::encode::openai_responses::encode_request_checked(req, &model)
+                .map_err(|error| upstream_encode_error("unsupported_media", error))?
+        }
         ProviderType::ChatCompletion => {
-            urp::encode::openai_chat::encode_request_checked(req, &model, attempt.chat_dialect)
-                .map_err(|error| {
-                    AppError::new(StatusCode::BAD_REQUEST, error.code, error.message)
-                })?
+            urp::encode::openai_chat::encode_request_checked(req, &model, chat_dialect)
+                .map_err(|error| upstream_encode_error(error.code, error.error))?
         }
         ProviderType::Messages => urp::encode::anthropic::encode_request_checked(req, &model)
-            .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-            })?,
-        ProviderType::Gemini => {
-            urp::encode::gemini::encode_request_checked(req, &model).map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
-            })?
-        }
+            .map_err(|error| upstream_encode_error("invalid_request", error))?,
+        ProviderType::Gemini => urp::encode::gemini::encode_request_checked(req, &model)
+            .map_err(|error| upstream_encode_error("unsupported_media", error))?,
         ProviderType::OpenaiImage => urp::encode::openai_image::encode_request_checked(req, &model)
-            .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
-            })?,
+            .map_err(|error| upstream_encode_error("invalid_request", error))?,
         ProviderType::OpenrouterImage => urp::encode::openrouter_image::encode_request(req, &model)
-            .map_err(|message| {
-                AppError::new(StatusCode::BAD_REQUEST, "unsupported_media", message)
-            })?,
-        ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model),
+            .map_err(|error| upstream_encode_error("unsupported_media", error))?,
+        ProviderType::Replicate => urp::encode::replicate::encode_request(req, &model)
+            .map_err(|error| upstream_encode_error("unsupported_media", error))?,
         ProviderType::Group => {
             return Err(AppError::new(
                 StatusCode::BAD_REQUEST,
@@ -131,6 +134,16 @@ pub(in crate::handlers) fn encode_request_for_provider(
         }
     };
     Ok(value)
+}
+
+pub(in crate::handlers) fn upstream_encode_error(
+    code: &str,
+    error: urp::media::MediaError,
+) -> AppError {
+    let target_capability = matches!(error, urp::media::MediaError::TargetCapability(_));
+    let mut err = AppError::new(StatusCode::BAD_REQUEST, code, String::from(error));
+    err.target_capability = target_capability;
+    err
 }
 
 pub(in crate::handlers) fn decode_response_from_provider(

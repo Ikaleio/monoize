@@ -83,10 +83,24 @@ impl<'a> NonstreamRun<'a> {
         // the encoded upstream request even when the downstream and
         // upstream protocol families differ.
         let req = attempt_request_from_original(&mut self.original_req, slot.final_slot);
-        let (mut call, upstream_body) = self.prepare_call(attempt, slot, req).await?;
-        let exchange = self
-            .send_upstream(attempt, &mut call, upstream_body)
-            .await?;
+        let (mut call, upstream_body) = match self.prepare_call(attempt, slot, req).await {
+            Err(error) if error.target_capability => {
+                return Ok(TryOutcome::Failed {
+                    error,
+                    failure_class: None,
+                });
+            }
+            other => other?,
+        };
+        let exchange = match self.send_upstream(attempt, &mut call, upstream_body).await {
+            Err(error) if error.target_capability => {
+                return Ok(TryOutcome::Failed {
+                    error,
+                    failure_class: None,
+                });
+            }
+            other => other?,
+        };
         match exchange {
             Exchange::Reply(reply) => return self.handle_reply(attempt, call, reply, accept).await,
             Exchange::CallFailed(err) => Ok(self.handle_call_failure(attempt, call, err).await),

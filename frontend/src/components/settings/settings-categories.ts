@@ -287,14 +287,6 @@ export const SETTING_ENTRIES = [
     fields: ["monoize_affinity_failback_delay_seconds"],
   },
   {
-    id: "monoize_active_probe_enabled",
-    group: "routing.probe",
-    labelKey: "settings.activeProbeEnabled",
-    descriptionKey: "settings.activeProbeEnabledDescription",
-    keywordsKey: "settings.keywordsProbe",
-    fields: ["monoize_active_probe_enabled"],
-  },
-  {
     id: "monoize_active_probe_interval_seconds",
     group: "routing.probe",
     labelKey: "settings.activeProbeIntervalSeconds",
@@ -321,6 +313,14 @@ export const SETTING_ENTRIES = [
     descriptionKey: "settings.activeProbeModelDescription",
     keywordsKey: "settings.keywordsProbe",
     fields: ["monoize_active_probe_model"],
+  },
+  {
+    id: "monoize_active_probe_stream",
+    group: "routing.probe",
+    labelKey: "settings.activeProbeStream",
+    descriptionKey: "settings.activeProbeStreamDescription",
+    keywordsKey: "settings.keywordsProbe",
+    fields: ["monoize_active_probe_stream"],
   },
   {
     id: "monoize_passive_failure_threshold",
@@ -351,6 +351,14 @@ export const SETTING_ENTRIES = [
     min: 1,
     unitKey: "settings.unitSeconds",
     fields: ["monoize_passive_window_seconds"],
+  },
+  {
+    id: "monoize_honor_rate_limit",
+    group: "routing.passive",
+    labelKey: "settings.honorRateLimit",
+    descriptionKey: "settings.honorRateLimitDescription",
+    keywordsKey: "settings.keywordsBreaker",
+    fields: ["monoize_honor_rate_limit"],
   },
   {
     id: "monoize_passive_rate_limit_cooldown_seconds",

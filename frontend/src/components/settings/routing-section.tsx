@@ -67,13 +67,6 @@ export function RoutingSection({ settings, onChange }: RoutingSectionProps) {
       </SettingsGroup>
 
       <SettingsGroup id="routing.probe">
-        <SwitchRow
-          id="monoize_active_probe_enabled"
-          checked={settings.monoize_active_probe_enabled}
-          onCheckedChange={(monoize_active_probe_enabled) =>
-            onChange({ monoize_active_probe_enabled })
-          }
-        />
         <NumberRow
           id="monoize_active_probe_interval_seconds"
           value={settings.monoize_active_probe_interval_seconds}
@@ -96,6 +89,11 @@ export function RoutingSection({ settings, onChange }: RoutingSectionProps) {
             placeholder={t("settings.activeProbeModelPlaceholder")}
           />
         </SettingRow>
+        <SwitchRow
+          id="monoize_active_probe_stream"
+          checked={settings.monoize_active_probe_stream}
+          onCheckedChange={(monoize_active_probe_stream) => onChange({ monoize_active_probe_stream })}
+        />
       </SettingsGroup>
 
       <SettingsGroup id="routing.passive">
@@ -119,6 +117,11 @@ export function RoutingSection({ settings, onChange }: RoutingSectionProps) {
           onValueChange={(monoize_passive_window_seconds) =>
             onChange({ monoize_passive_window_seconds })
           }
+        />
+        <SwitchRow
+          id="monoize_honor_rate_limit"
+          checked={settings.monoize_honor_rate_limit}
+          onCheckedChange={(monoize_honor_rate_limit) => onChange({ monoize_honor_rate_limit })}
         />
         <NumberRow
           id="monoize_passive_rate_limit_cooldown_seconds"

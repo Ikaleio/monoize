@@ -127,9 +127,9 @@ OpenCode Go 用 `x-opencode-session` 将会话绑定到提示缓存。缺少该�
 
 展开 Provider 后，Channel 行的开关会立即启用或禁用该 Channel，无需打开编辑器。
 
-测试会发送一次短流式补全，输出上限为 16 个 token。仅 HTTP 2xx 不够。流必须到达协议终结事件。
+对补全类测试，**快速测试**使用 Channel 的生效流式设置。测试对话框也以该设置作为初始值。对于支持流式测试的模型，可以通过**流式响应**更改初始模式。图像和决策类测试始终使用非流式请求。
 
-对 Responses Channel，`response.completed` 算通过。没有 error 对象的 `response.incomplete` 也算通过。推理模型可能打满 16 token 上限并返回 `incomplete`。该结果仍表示 Channel 可达。
+测试与[主动探测](/zh/docs/routing)使用相同的请求处理流程和成功判定规则。补全类测试的请求变换可以修改流式模式或初始的 16 token 输出上限。流式测试仅收到 HTTP `2xx` 还不算成功；解码器必须读到终止事件，且没有输出错误事件。非流式补全测试要求解码器成功解析响应体。
 
 ## 映射模型
 

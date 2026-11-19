@@ -17,14 +17,7 @@ pub(super) fn reset_channel_health_after_successful_test(
     if !health.contains_key(&key) && health.len() >= max_entries {
         return;
     }
-    // Every field except the passive-failure samples is overwritten, so the
-    // `Default` (unhealthy) starting state never leaks out.
-    let entry = health.entry(key).or_default();
-    entry.healthy = true;
-    entry.cooldown_until = None;
-    entry.last_success_at = Some(now);
-    entry.probe_success_count = 0;
-    entry.last_probe_at = None;
+    health.entry(key).or_default().mark_success(now);
 }
 
 fn health_timestamp(ts: Option<i64>) -> Option<String> {
@@ -32,91 +25,94 @@ fn health_timestamp(ts: Option<i64>) -> Option<String> {
         .map(|value| value.to_rfc3339())
 }
 
-fn apply_channel_runtime(
-    channel: &mut MonoizeChannel,
-    health: &ChannelHealthState,
-    unhealthy_models: Vec<String>,
-    probing_models: Vec<String>,
-    cooldown_until: Option<i64>,
+#[derive(Default)]
+pub(in crate::dashboard_handlers) struct ChannelHealthSummary {
+    pub unhealthy: bool,
+    pub next_recovery_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub last_probe_at: Option<i64>,
+    pub probe_success_count: u32,
+    pub unhealthy_models: Vec<String>,
+}
+
+impl ChannelHealthSummary {
+    fn add(&mut self, entry: &ChannelHealthState, model: Option<&str>, now: i64) {
+        if entry.is_unhealthy(now) {
+            self.unhealthy = true;
+            if let Some(next) = entry.next_recovery_at {
+                self.next_recovery_at = Some(
+                    self.next_recovery_at
+                        .map_or(next, |current| current.min(next)),
+                );
+            }
+            if let Some(model) = model {
+                self.unhealthy_models.push(model.to_owned());
+            }
+        }
+        self.last_success_at = self.last_success_at.max(entry.last_success_at);
+        self.last_probe_at = self.last_probe_at.max(entry.last_probe_at);
+        self.probe_success_count = self.probe_success_count.max(entry.probe_success_count);
+    }
+}
+
+pub(in crate::dashboard_handlers) fn summarize_channel_health(
+    channel: &MonoizeChannel,
+    circuit_breaker_enabled: bool,
+    per_model_circuit_break: bool,
+    health: &HashMap<String, ChannelHealthState>,
+    now: i64,
+) -> ChannelHealthSummary {
+    let mut summary = ChannelHealthSummary::default();
+    if !circuit_breaker_enabled {
+        return summary;
+    }
+    if per_model_circuit_break {
+        for model in channel.models.keys() {
+            if let Some(entry) = health.get(&health_key(&channel.id, Some(model))) {
+                summary.add(entry, Some(model), now);
+            }
+        }
+        summary.unhealthy_models.sort_unstable();
+    } else if let Some(entry) = health.get(&channel.id) {
+        summary.add(entry, None, now);
+    }
+    summary
+}
+
+pub(super) fn apply_provider_runtime(
+    provider: &mut MonoizeProvider,
+    health: &HashMap<String, ChannelHealthState>,
     now: i64,
 ) {
-    channel._healthy = Some(health.healthy);
-    channel._health_status = Some(health.status(now).to_string());
-    channel._last_success_at = health_timestamp(health.last_success_at);
-    channel._unhealthy_models = Some(unhealthy_models);
-    channel._probing_models = Some(probing_models);
-    channel._cooldown_until = health_timestamp(cooldown_until);
+    for channel in &mut provider.channels {
+        let summary = summarize_channel_health(
+            channel,
+            provider.circuit_breaker_enabled,
+            provider.per_model_circuit_break,
+            health,
+            now,
+        );
+        channel._healthy = Some(!summary.unhealthy);
+        channel._health_status = Some(
+            if summary.unhealthy {
+                "unhealthy"
+            } else {
+                "healthy"
+            }
+            .to_owned(),
+        );
+        channel._last_success_at = health_timestamp(summary.last_success_at);
+        channel._unhealthy_models = Some(summary.unhealthy_models);
+        channel._next_recovery_at = health_timestamp(summary.next_recovery_at);
+    }
 }
 
 pub(super) async fn provider_with_runtime(
     state: &AppState,
     mut provider: MonoizeProvider,
 ) -> MonoizeProvider {
-    let now = chrono::Utc::now().timestamp();
-    if !provider.circuit_breaker_enabled {
-        for channel in &mut provider.channels {
-            apply_channel_runtime(
-                channel,
-                &ChannelHealthState::new(),
-                Vec::new(),
-                Vec::new(),
-                None,
-                now,
-            );
-        }
-        return provider;
-    }
     let health = state.channel_health.lock().await;
-    for channel in &mut provider.channels {
-        let mut unhealthy_models = Vec::new();
-        let mut probing_models = Vec::new();
-        let states: Vec<ChannelHealthState> = if provider.per_model_circuit_break {
-            let mut model_ids: Vec<&String> = channel.models.keys().collect();
-            model_ids.sort();
-            model_ids
-                .into_iter()
-                .map(|model| {
-                    let state = health
-                        .get(&health_key(&channel.id, Some(model)))
-                        .cloned()
-                        .unwrap_or_else(ChannelHealthState::new);
-                    match state.status(now) {
-                        "unhealthy" => unhealthy_models.push(model.clone()),
-                        "probing" => probing_models.push(model.clone()),
-                        _ => {}
-                    }
-                    state
-                })
-                .collect()
-        } else {
-            vec![
-                health
-                    .get(&health_key(&channel.id, None))
-                    .cloned()
-                    .unwrap_or_else(ChannelHealthState::new),
-            ]
-        };
-        let state = states
-            .iter()
-            .find(|state| state.status(now) == "unhealthy")
-            .or_else(|| states.iter().find(|state| state.status(now) == "probing"))
-            .or_else(|| states.first())
-            .cloned()
-            .unwrap_or_else(ChannelHealthState::new);
-        let cooldown_until = states
-            .iter()
-            .filter(|state| state.status(now) == "unhealthy")
-            .filter_map(|state| state.cooldown_until)
-            .max();
-        apply_channel_runtime(
-            channel,
-            &state,
-            unhealthy_models,
-            probing_models,
-            cooldown_until,
-            now,
-        );
-    }
+    apply_provider_runtime(&mut provider, &health, chrono::Utc::now().timestamp());
     provider
 }
 
@@ -125,7 +121,7 @@ struct ModelRuntimeChannel {
     channel_id: String,
     channel_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cooldown_until: Option<String>,
+    next_recovery_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,6 +146,8 @@ fn sort_runtime_channels(channels: &mut [ModelRuntimeChannel]) {
 pub(super) fn build_provider_model_runtime_statuses(
     provider: &MonoizeProvider,
     unpriced_entries: &HashSet<(String, String)>,
+    health: &HashMap<String, ChannelHealthState>,
+    now: i64,
 ) -> Vec<ProviderModelRuntimeStatus> {
     let mut models: Vec<String> = provider
         .channels
@@ -175,21 +173,20 @@ pub(super) fn build_provider_model_runtime_statuses(
             let mut breaker_channels: Vec<ModelRuntimeChannel> = eligible_channels
                 .iter()
                 .copied()
-                .filter(|channel| {
-                    provider.circuit_breaker_enabled
-                        && if provider.per_model_circuit_break {
-                            channel
-                                ._unhealthy_models
-                                .as_ref()
-                                .is_some_and(|models| models.contains(&model))
-                        } else {
-                            channel._health_status.as_deref() == Some("unhealthy")
-                        }
-                })
-                .map(|channel| ModelRuntimeChannel {
-                    channel_id: channel.id.clone(),
-                    channel_name: channel.name.clone(),
-                    cooldown_until: channel._cooldown_until.clone(),
+                .filter_map(|channel| {
+                    if !provider.circuit_breaker_enabled {
+                        return None;
+                    }
+                    let entry = if provider.per_model_circuit_break {
+                        health.get(&health_key(&channel.id, Some(&model)))
+                    } else {
+                        health.get(&channel.id)
+                    }?;
+                    entry.is_unhealthy(now).then(|| ModelRuntimeChannel {
+                        channel_id: channel.id.clone(),
+                        channel_name: channel.name.clone(),
+                        next_recovery_at: health_timestamp(entry.next_recovery_at),
+                    })
                 })
                 .collect();
             sort_runtime_channels(&mut breaker_channels);
@@ -212,7 +209,7 @@ pub(super) fn build_provider_model_runtime_statuses(
                 .map(|channel| ModelRuntimeChannel {
                     channel_id: channel.id.clone(),
                     channel_name: channel.name.clone(),
-                    cooldown_until: None,
+                    next_recovery_at: None,
                 })
                 .collect();
             sort_runtime_channels(&mut unpriced_channels);
@@ -237,12 +234,13 @@ pub(super) fn build_provider_model_runtime_statuses(
         .collect()
 }
 
-pub(super) async fn prune_provider_channel_health(state: &AppState, channel_ids: &[String]) {
+pub(super) async fn advance_routing_config_revision(state: &AppState, channel_ids: &[String]) {
+    let mut health = state.channel_health.lock().await;
+    state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
     if channel_ids.is_empty() {
         return;
     }
     let ids: HashSet<&str> = channel_ids.iter().map(String::as_str).collect();
-    let mut health = state.channel_health.lock().await;
     health.retain(|channel_key, _| {
         let channel_id = channel_key
             .split_once("::")
@@ -262,8 +260,4 @@ pub(super) async fn prune_provider_channel_affinity(state: &AppState, channel_id
         .lock()
         .await
         .retain(|_, binding| !ids.contains(binding.channel_id.as_str()));
-}
-
-pub(super) fn advance_routing_config_revision(state: &AppState) {
-    state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
 }

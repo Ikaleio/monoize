@@ -233,6 +233,7 @@ function ProvidersPageContent() {
 						onDragEnd={endDrag}
 						modelMetadata={modelMetadata}
 						globalProbeModel={settings?.monoize_active_probe_model}
+						globalProbeStream={settings?.monoize_active_probe_stream}
 						focusRequest={focusRequest?.providerId === provider.id ? focusRequest.request : null}
 					/>
 				))}

@@ -2,7 +2,6 @@ use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::dashboard_handlers::settings::redact_dsn;
 use crate::error::{AppError, AppResult};
-use crate::handlers::routing::health_key;
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -173,32 +172,13 @@ async fn overview_channel_health(
     let mut channel_health: Vec<Value> = Vec::new();
     for provider in providers {
         for channel in provider.channels {
-            let base_entry = health.get(&channel.id);
-            let mut healthy = base_entry.map(|entry| entry.healthy).unwrap_or(true);
-            let mut cooldown_until = base_entry.and_then(|entry| entry.cooldown_until);
-            let mut last_success_at = base_entry.and_then(|entry| entry.last_success_at);
-            let mut last_probe_at = base_entry.and_then(|entry| entry.last_probe_at);
-            let mut probe_success_count = base_entry
-                .map(|entry| entry.probe_success_count)
-                .unwrap_or(0);
-            let mut unhealthy_models: Vec<String> = Vec::new();
-            if provider.per_model_circuit_break {
-                for model in channel.models.keys() {
-                    let Some(entry) = health.get(&health_key(&channel.id, Some(model))) else {
-                        continue;
-                    };
-                    healthy &= entry.healthy;
-                    if entry.cooldown_until.is_some_and(|until| until > now_secs) || !entry.healthy
-                    {
-                        unhealthy_models.push(model.clone());
-                    }
-                    cooldown_until = cooldown_until.max(entry.cooldown_until);
-                    last_success_at = last_success_at.max(entry.last_success_at);
-                    last_probe_at = last_probe_at.max(entry.last_probe_at);
-                    probe_success_count = probe_success_count.max(entry.probe_success_count);
-                }
-                unhealthy_models.sort();
-            }
+            let summary = super::providers::runtime::summarize_channel_health(
+                &channel,
+                provider.circuit_breaker_enabled,
+                provider.per_model_circuit_break,
+                &health,
+                now_secs,
+            );
             let window = channel_window.get(&channel.id);
             channel_health.push(json!({
                 "provider_id": provider.id,
@@ -208,13 +188,12 @@ async fn overview_channel_health(
                 "enabled": channel.enabled,
                 "weight": channel.weight,
                 "session_affinity_auto": channel.session_affinity_auto.unwrap_or(false),
-                "healthy": healthy,
-                "last_success_at": last_success_at.map(|secs| secs.saturating_mul(1000)),
-                "cooldown_until": cooldown_until.map(|secs| secs.saturating_mul(1000)),
-                "probe_success_count": probe_success_count,
-                "last_probe_at": last_probe_at.map(|secs| secs.saturating_mul(1000)),
-                "cooldown_active": cooldown_until.is_some_and(|until| until > now_secs),
-                "unhealthy_models": unhealthy_models,
+                "healthy": !summary.unhealthy,
+                "last_success_at": summary.last_success_at.map(|secs| secs.saturating_mul(1000)),
+                "next_recovery_at": summary.next_recovery_at.map(|secs| secs.saturating_mul(1000)),
+                "probe_success_count": summary.probe_success_count,
+                "last_probe_at": summary.last_probe_at.map(|secs| secs.saturating_mul(1000)),
+                "unhealthy_models": summary.unhealthy_models,
                 "window_calls": window.map(|row| row.window_calls).unwrap_or(0),
                 "window_cost_nano_usd": window
                     .map(|row| row.window_cost_nano_usd.to_string())

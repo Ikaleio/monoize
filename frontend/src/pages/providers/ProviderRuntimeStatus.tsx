@@ -9,7 +9,7 @@ import type {
 	ProviderModelRuntimeStatus
 } from '@/lib/api'
 import { formatDateTime } from '@/lib/format-time'
-import { effectiveChannelStatus, effectiveStatusBadge, healthBadge } from './shared'
+import { effectiveChannelStatus, effectiveStatusBadge } from './shared'
 
 export function ProviderModelRuntimeBadge({
 	model,
@@ -79,8 +79,8 @@ export function ProviderModelRuntimeBadge({
 											{status.breaker_channels.map(channel => (
 												<span key={channel.channel_id} className='break-words font-mono text-sm'>
 													{channel.channel_name}
-													{channel.cooldown_until ?
-														` · ${t('providers.until', { time: formatDateTime(channel.cooldown_until) })}`
+													{channel.next_recovery_at ?
+														` · ${t('providers.nextRecoveryAt', { time: formatDateTime(channel.next_recovery_at) })}`
 													: 	null}
 												</span>
 											))}
@@ -123,46 +123,32 @@ export function ChannelRuntimeStatus({
 }) {
 	const { t } = useTranslation()
 	const effective = effectiveChannelStatus(channel.enabled, channel.weight, channel._health_status ?? 'healthy')
-	if (effective !== 'unhealthy' && effective !== 'probing') return effectiveStatusBadge(effective, t)
-	const status = effective
-	const models =
-		status === 'unhealthy' ? channel._unhealthy_models ?? []
-		: channel._probing_models ?? []
+	const badge = effectiveStatusBadge(effective, t)
+	if (effective !== 'unhealthy') return badge
+	const models = channel._unhealthy_models ?? []
 
 	return (
 		<BadgeOverflowList
 			items={[
 				{
-					key: status,
-					collapsed: healthBadge(status, t),
+					key: effective,
+					collapsed: badge,
 					full: (
 						<div className='flex min-w-56 max-w-sm flex-col gap-2 p-2 text-sm'>
 							<div className='flex items-center gap-2 font-medium'>
-								{status === 'unhealthy' ?
-									<TriangleAlert className='size-4 text-error-foreground' />
-								: 	<RadioTower className='size-4 text-warning' />}
-								{perModelCircuitBreak ?
-									t(
-										status === 'unhealthy' ?
-											'providers.trippedModels'
-										: 	'providers.probingModels'
-									)
-								: 	t(
-										status === 'unhealthy' ?
-											'providers.channelBreakerOpen'
-										: 	'providers.channelProbing'
-									)}
+								<TriangleAlert className='size-4 text-error-foreground' />
+								{t(perModelCircuitBreak ? 'providers.trippedModels' : 'providers.channelBreakerOpen')}
 							</div>
 							{perModelCircuitBreak && models.length > 0 && (
 								<span className='break-words font-mono text-sm text-muted-foreground'>
 									{models.join(', ')}
 								</span>
 							)}
-							{channel._cooldown_until && (
+							{channel._next_recovery_at && (
 								<span className='flex items-center gap-2 text-muted-foreground'>
 									<Clock3 className='size-4' />
-									{t('providers.cooldownUntil', {
-										time: formatDateTime(channel._cooldown_until)
+									{t('providers.nextRecoveryAt', {
+										time: formatDateTime(channel._next_recovery_at)
 									})}
 								</span>
 							)}

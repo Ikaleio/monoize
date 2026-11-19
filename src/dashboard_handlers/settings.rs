@@ -28,10 +28,15 @@ pub struct UpdateSettingsRequest {
     pub codex_model_ids: Option<Vec<String>>,
     pub dashboard_performance_group_ids: Option<Vec<String>>,
     pub dashboard_performance_model_ids: Option<Vec<String>>,
-    pub monoize_active_probe_enabled: Option<bool>,
+    pub monoize_honor_rate_limit: Option<bool>,
     pub monoize_active_probe_interval_seconds: Option<u64>,
     pub monoize_active_probe_success_threshold: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::monoize_routing::deserialize_nullable_override"
+    )]
     pub monoize_active_probe_model: Option<Option<String>>,
+    pub monoize_active_probe_stream: Option<bool>,
     pub monoize_passive_failure_threshold: Option<u32>,
     pub monoize_passive_cooldown_seconds: Option<u64>,
     pub monoize_passive_window_seconds: Option<u64>,
@@ -132,10 +137,11 @@ pub async fn update_settings(
         settings.monoize_passive_cooldown_seconds,
         settings.monoize_passive_window_seconds,
         settings.monoize_passive_rate_limit_cooldown_seconds,
-        settings.monoize_active_probe_enabled,
+        settings.monoize_honor_rate_limit,
         settings.monoize_active_probe_interval_seconds,
         settings.monoize_active_probe_success_threshold,
         settings.monoize_active_probe_model.clone(),
+        settings.monoize_active_probe_stream,
     );
 
     apply_settings_update(&mut settings, body)?;
@@ -144,8 +150,6 @@ pub async fn update_settings(
         .update_all(&settings)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
-
-    publish_runtime_settings(&state, &updated).await;
 
     let affinity_settings_after = (
         updated.monoize_affinity_enabled,
@@ -158,21 +162,26 @@ pub async fn update_settings(
         updated.monoize_passive_cooldown_seconds,
         updated.monoize_passive_window_seconds,
         updated.monoize_passive_rate_limit_cooldown_seconds,
-        updated.monoize_active_probe_enabled,
+        updated.monoize_honor_rate_limit,
         updated.monoize_active_probe_interval_seconds,
         updated.monoize_active_probe_success_threshold,
         updated.monoize_active_probe_model.clone(),
+        updated.monoize_active_probe_stream,
     );
     let affinity_changed = affinity_settings_before != affinity_settings_after;
     let health_changed = health_settings_before != health_settings_after;
     if affinity_changed || health_changed {
+        let mut health = state.channel_health.lock().await;
+        publish_runtime_settings(&state, &updated).await;
         state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
+        if health_changed {
+            health.clear();
+        }
+    } else {
+        publish_runtime_settings(&state, &updated).await;
     }
     if affinity_changed {
         state.channel_affinity.lock().await.clear();
-    }
-    if health_changed {
-        state.channel_health.lock().await.clear();
     }
 
     mask_price_sync_token(&mut updated);
@@ -330,14 +339,17 @@ fn apply_settings_update(
     if let Some(v) = body.dashboard_performance_model_ids {
         settings.dashboard_performance_model_ids = v;
     }
-    if let Some(v) = body.monoize_active_probe_enabled {
-        settings.monoize_active_probe_enabled = v;
+    if let Some(v) = body.monoize_honor_rate_limit {
+        settings.monoize_honor_rate_limit = v;
     }
     if let Some(v) = body.monoize_active_probe_interval_seconds {
         settings.monoize_active_probe_interval_seconds = v.max(1);
     }
     if let Some(v) = body.monoize_active_probe_success_threshold {
         settings.monoize_active_probe_success_threshold = v.max(1);
+    }
+    if let Some(v) = body.monoize_active_probe_stream {
+        settings.monoize_active_probe_stream = v;
     }
     if let Some(v) = body.monoize_active_probe_model {
         settings.monoize_active_probe_model = v.and_then(|s| {
@@ -444,10 +456,11 @@ async fn publish_runtime_settings(state: &AppState, updated: &crate::settings::S
     rt.passive_window_seconds = updated.monoize_passive_window_seconds.max(1);
     rt.passive_rate_limit_cooldown_seconds =
         updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
-    rt.active_enabled = updated.monoize_active_probe_enabled;
+    rt.honor_rate_limit = updated.monoize_honor_rate_limit;
     rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
     rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
     rt.active_probe_model = updated.monoize_active_probe_model.clone();
+    rt.active_probe_stream = updated.monoize_active_probe_stream;
     rt.global_transforms = updated.global_transforms.clone();
     rt.set_global_model_redirects(updated.global_model_redirects.clone())
         .expect("validated global model redirects compile");

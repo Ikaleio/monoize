@@ -86,43 +86,15 @@ impl ActiveProbePricingSnapshot {
     }
 }
 
-async fn build_active_probe_pricing_snapshot(
+async fn build_active_probe_pricing_snapshot<'a>(
     model_price_store: &crate::model_price_store::ModelPriceStore,
-    providers: &[crate::monoize_routing::MonoizeProvider],
-    runtime: &MonoizeRuntimeConfig,
+    probes: impl IntoIterator<Item = crate::monoize_routing::ChannelProbe<'a>>,
+    reasoning_suffix_map: HashMap<String, String>,
 ) -> Result<ActiveProbePricingSnapshot, String> {
-    let reasoning_suffix_map = runtime.reasoning_suffix_map.clone();
     let mut keys = std::collections::HashSet::new();
-    for provider in providers {
-        for channel in &provider.channels {
-            let configured_model = channel
-                .active_probe_model_override
-                .as_ref()
-                .or(provider.active_probe_model_override.as_ref())
-                .or(runtime.active_probe_model.as_ref())
-                .cloned();
-            let Some(logical_model) =
-                configured_model.or_else(|| channel.models.keys().min().cloned())
-            else {
-                continue;
-            };
-            let Some(entry) = channel.models.get(&logical_model) else {
-                continue;
-            };
-            let upstream_model = entry
-                .redirect
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(&logical_model);
-            keys.insert(normalize_pricing_model_key(
-                upstream_model,
-                &reasoning_suffix_map,
-            ));
-            keys.insert(normalize_pricing_model_key(
-                &logical_model,
-                &reasoning_suffix_map,
-            ));
+    for probe in probes {
+        for model in [probe.upstream_model, probe.logical_model] {
+            keys.insert(normalize_pricing_model_key(model, &reasoning_suffix_map));
         }
     }
     let mut keys = keys.into_iter().collect::<Vec<_>>();
@@ -140,32 +112,6 @@ async fn build_active_probe_pricing_snapshot(
     })
 }
 
-fn build_probe_usage_breakdown(prompt_tokens: u64, completion_tokens: u64) -> Value {
-    json!({
-        "version": 1,
-        "input": {
-            "total_tokens": prompt_tokens,
-            "uncached_tokens": prompt_tokens,
-            "text_tokens": prompt_tokens,
-            "cached_tokens": 0,
-            "cache_creation_tokens": null,
-            "audio_tokens": null,
-            "image_tokens": null
-        },
-        "output": {
-            "total_tokens": completion_tokens,
-            "non_reasoning_tokens": completion_tokens,
-            "text_tokens": completion_tokens,
-            "reasoning_tokens": null,
-            "audio_tokens": null,
-            "image_tokens": null
-        },
-        "raw_usage_extra": {
-            "source": "active_probe"
-        }
-    })
-}
-
 /// Identity of one probe attempt, shared by its armed fallback log and its success log.
 #[derive(Clone, Copy)]
 struct ActiveProbeLogContext<'a> {
@@ -179,6 +125,7 @@ struct ActiveProbeLogContext<'a> {
     channel_name: &'a str,
     logical_model: &'a str,
     upstream_model: &'a str,
+    is_stream: bool,
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -194,6 +141,7 @@ fn build_active_probe_interrupted_log(context: ActiveProbeLogContext<'_>) -> Ins
         channel_name,
         logical_model,
         upstream_model,
+        is_stream,
         created_at,
     } = context;
     InsertRequestLog {
@@ -211,7 +159,7 @@ fn build_active_probe_interrupted_log(context: ActiveProbeLogContext<'_>) -> Ins
             provider_name: Some(provider_name.to_string()),
             channel_name: Some(channel_name.to_string()),
         },
-        is_stream: false,
+        is_stream,
         input_tokens: None,
         output_tokens: None,
         cache_read_tokens: None,
@@ -249,7 +197,7 @@ async fn persist_active_probe_request_log(
     user_store: &UserStore,
     context: ActiveProbeLogContext<'_>,
     pricing: (String, Option<crate::model_price_store::ModelPriceRecord>),
-    usage_snapshot: Option<Value>,
+    usage_snapshot: Option<crate::urp::Usage>,
     duration_ms: u64,
     reservation: crate::db_cache::RequestLogReservation,
 ) -> Result<(), String> {
@@ -264,34 +212,19 @@ async fn persist_active_probe_request_log(
         channel_name,
         logical_model,
         upstream_model,
+        is_stream,
         created_at,
     } = context;
     let channel_multiplier = channel_multiplier.unwrap_or(Multiplier::ONE);
     let (pricing_model_key, model_price) = pricing;
-    let parsed_prompt_tokens = usage_snapshot
-        .as_ref()
-        .and_then(|v| v.get("prompt_tokens"))
-        .and_then(|v| v.as_u64());
-    let parsed_completion_tokens = usage_snapshot
-        .as_ref()
-        .and_then(|v| v.get("completion_tokens"))
-        .and_then(|v| v.as_u64());
-    let usage_tokens = parsed_prompt_tokens.zip(parsed_completion_tokens);
+    let usage_snapshot = usage_snapshot.filter(|usage| usage.reported_token_counts);
     let (charge_nano_usd, billing_breakdown_json) = if let Some(price) = model_price.as_ref()
-        && let Some((prompt_tokens, completion_tokens)) = usage_tokens
+        && let Some(usage) = usage_snapshot.as_ref()
     {
-        let usage = crate::urp::Usage {
-            iterations: None,
-            input_tokens: prompt_tokens,
-            output_tokens: completion_tokens,
-            input_details: None,
-            output_details: None,
-            extra_body: HashMap::new(),
-        };
         // The probe settles at group ratio 1 and the channel multiplier; the
         // probe user has no group memberships.
         let inputs = crate::settlement::SettlementInputs {
-            usage: crate::settlement::SettledUsage::Reported(&usage),
+            usage: crate::settlement::SettledUsage::Reported(usage),
             output: None,
             price: Some(price),
             pricing_model_key: &pricing_model_key,
@@ -318,11 +251,7 @@ async fn persist_active_probe_request_log(
         (None, None)
     };
 
-    let usage_breakdown_json = usage_tokens.map(|(prompt_tokens, completion_tokens)| {
-        build_probe_usage_breakdown(prompt_tokens, completion_tokens)
-    });
-
-    let log = InsertRequestLog {
+    let mut log = InsertRequestLog {
         request_id: Some(request_id.to_string()),
         user_id: user_id.to_string(),
         api_key_id: None,
@@ -337,10 +266,10 @@ async fn persist_active_probe_request_log(
             provider_name: Some(provider_name.to_string()),
             channel_name: Some(channel_name.to_string()),
         },
-        is_stream: false,
-        input_tokens: usage_tokens.map(|(prompt_tokens, _)| prompt_tokens),
-        output_tokens: usage_tokens.map(|(_, completion_tokens)| completion_tokens),
-        cache_read_tokens: usage_tokens.map(|_| 0),
+        is_stream,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
         cache_creation_tokens: None,
         tool_prompt_tokens: None,
         reasoning_tokens: None,
@@ -349,7 +278,7 @@ async fn persist_active_probe_request_log(
         provider_multiplier: Some(channel_multiplier),
         charge_nano_usd,
         status: "success".to_string(),
-        usage_breakdown_json,
+        usage_breakdown_json: None,
         billing_breakdown_json,
         error_code: None,
         error_message: None,
@@ -368,15 +297,8 @@ async fn persist_active_probe_request_log(
         created_at,
     };
 
+    crate::handlers::apply_usage_fields(&mut log, usage_snapshot.as_ref());
     user_store
         .finalize_reserved_request_log(log, reservation)
         .await
-}
-
-fn clear_channel_health_state(state: &mut ChannelHealthState, now: i64) {
-    state.healthy = true;
-    state.cooldown_until = None;
-    state.last_success_at = Some(now);
-    state.probe_success_count = 0;
-    state.last_probe_at = None;
 }

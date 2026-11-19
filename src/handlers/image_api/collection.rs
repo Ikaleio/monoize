@@ -51,8 +51,11 @@ pub(super) async fn collect_image_stream(
     input: ImageStreamInput,
     sink: &mut Option<&mut ImageStreamSink>,
 ) -> AppResult<ImageCollection> {
+    let retry_after_seconds = upstream::parse_retry_after(input.response.headers(), now_ts());
     let pipeline = start_image_pipeline(execution, attempt, prepared, input).await;
-    pipeline.collect(&execution.logical_model, sink).await
+    pipeline
+        .collect(&execution.logical_model, sink, retry_after_seconds)
+        .await
 }
 
 async fn start_image_pipeline(
@@ -188,6 +191,7 @@ impl ImageStreamPipeline {
         mut self,
         model: &str,
         sink: &mut Option<&mut ImageStreamSink>,
+        retry_after_seconds: Option<u16>,
     ) -> AppResult<ImageCollection> {
         let mut collected = ImageCollectedEvents::default();
         while let Some(event) = self.events.recv().await {
@@ -205,7 +209,12 @@ impl ImageStreamPipeline {
             Some(slot) => slot.lock().await.clone(),
             None => None,
         };
-        let result = collected.finish(decode_result, transform_result);
+        let retry_after_seconds = if collected.error.is_none() && !sink_frames_emitted(sink) {
+            retry_after_seconds
+        } else {
+            None
+        };
+        let result = collected.finish(decode_result, transform_result, retry_after_seconds);
         Ok(ImageCollection {
             result,
             metrics: self.metrics,
@@ -279,8 +288,12 @@ impl ImageCollectedEvents {
         self,
         decoded: AppResult<()>,
         transformed: AppResult<()>,
+        retry_after_seconds: Option<u16>,
     ) -> Result<urp::UrpResponse, ImageCollectionFailure> {
-        decoded.map_err(|error| ImageCollectionFailure { error, retry: true })?;
+        decoded.map_err(|mut error| {
+            error.retry_after_seconds = retry_after_seconds;
+            ImageCollectionFailure { error, retry: true }
+        })?;
         transformed.map_err(|error| ImageCollectionFailure {
             error,
             retry: false,
@@ -288,13 +301,14 @@ impl ImageCollectedEvents {
         if let Some(error) = self.error {
             return Err(ImageCollectionFailure { error, retry: true });
         }
-        let response = self.response.ok_or_else(|| ImageCollectionFailure {
-            error: AppError::new(
+        let response = self.response.ok_or_else(|| {
+            let mut error = AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "upstream_stream_error",
                 "stream completed without terminal response",
-            ),
-            retry: true,
+            );
+            error.retry_after_seconds = retry_after_seconds;
+            ImageCollectionFailure { error, retry: true }
         })?;
         validate_image_subrequest_response(&response)
             .map_err(|error| ImageCollectionFailure { error, retry: true })?;

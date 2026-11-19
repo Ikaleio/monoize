@@ -1,7 +1,9 @@
 //! Gemini `usageMetadata` decoding (PG6, PG6a). Response decoding, stream decoding, and stream
 //! metering share this parser.
 
-use crate::urp::decode::{deserialize_u64ish_default, retain_wire_extra_fields};
+use crate::urp::decode::{
+    deserialize_u64ish_default, deserialize_u64ish_optional, retain_wire_extra_fields,
+};
 use crate::urp::{InputDetails, ModalityBreakdown, OutputDetails, Usage};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -12,16 +14,16 @@ use std::collections::HashMap;
 struct GeminiUsage {
     #[serde(
         default,
-        deserialize_with = "deserialize_u64ish_default",
+        deserialize_with = "deserialize_u64ish_optional",
         alias = "prompt_token_count"
     )]
-    prompt_token_count: u64,
+    prompt_token_count: Option<u64>,
     #[serde(
         default,
-        deserialize_with = "deserialize_u64ish_default",
+        deserialize_with = "deserialize_u64ish_optional",
         alias = "candidates_token_count"
     )]
-    candidates_token_count: u64,
+    candidates_token_count: Option<u64>,
     #[serde(
         default,
         deserialize_with = "deserialize_u64ish_default",
@@ -105,10 +107,12 @@ impl TryFrom<GeminiUsage> for Usage {
         value.extra.retain(|_, value| value.is_number());
         let input_tokens = value
             .prompt_token_count
+            .unwrap_or(0)
             .checked_add(value.tool_prompt_tokens)
             .ok_or_else(|| "Gemini input token total overflow".to_string())?;
         let output_tokens = value
             .candidates_token_count
+            .unwrap_or(0)
             .checked_add(value.thoughts_token_count)
             .ok_or_else(|| "Gemini output token total overflow".to_string())?;
         let split = crate::urp::CacheWriteTokensDetails::from_wire(
@@ -149,6 +153,8 @@ impl TryFrom<GeminiUsage> for Usage {
 
         Ok(Usage {
             iterations: None,
+            reported_token_counts: value.prompt_token_count.is_some()
+                && value.candidates_token_count.is_some(),
             input_tokens,
             output_tokens,
             input_details,

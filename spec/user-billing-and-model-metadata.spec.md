@@ -51,7 +51,7 @@ U4. Usernames with prefix `_monoize_` (case-insensitive) are reserved for intern
 
 U5. Internal reserved users (`username` prefix `_monoize_`) MUST be excluded from user list APIs and user-count metrics used by dashboard/admin UI.
 
-U6. Monoize active-probe subsystem MUST ensure an internal user `_monoize_active_probe` exists before each probe attempt and MUST force this user to `balance_unlimited = true`.
+U6. On the primary, Monoize MUST resolve the internal user `_monoize_active_probe` once at startup, create it if missing, and ensure `balance_unlimited = true` before startup completes. Reuse the resolved user ID for every probe log. A read, creation, or unlimited-balance update failure MUST stop startup with `active_probe_user_init_failed` (`request-logs.spec.md` RL18d). Replicas skip this startup step (PRP11).
 
 U7. `email` is an optional field (`TEXT NULL` in SQLite). When set, it MUST be a non-empty string. The server MUST NOT validate email format beyond non-emptiness; the field is used solely for Gravatar URL generation.
 

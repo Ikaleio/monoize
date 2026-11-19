@@ -239,7 +239,7 @@ pub(in crate::handlers) async fn forward_stream_typed(
     let Some(mut forward) = StreamForward::route(request, req, client_session_id).await? else {
         return Ok(receiver_event_stream(mpsc::channel::<Event>(1).1));
     };
-    while let Some(slot) = forward.attempts.next() {
+    while let Some(slot) = forward.attempts.next(&forward.request.state).await {
         let plan = forward.plan_attempt(&slot.attempt).await;
         match forward.run_channel(slot, &plan).await? {
             Some(AcceptedAttempt::Synthetic(attempt, stream)) => {
@@ -315,11 +315,18 @@ impl StreamForward {
             let channel_try = self
                 .prepare_channel_try(&slot.attempt, plan, slot.position)
                 .await?;
-            let outcome = if plan.requires_buffered_stream {
+            let result = if plan.requires_buffered_stream {
                 self.try_buffered(&mut slot.attempt, plan, channel_try)
-                    .await?
+                    .await
             } else {
-                self.try_live(&mut slot.attempt, channel_try).await?
+                self.try_live(&mut slot.attempt, channel_try).await
+            };
+            let outcome = match result {
+                Err(error) if error.target_capability => SlotOutcome::Failed {
+                    error,
+                    failure_class: None,
+                },
+                other => other?,
             };
             match outcome {
                 SlotOutcome::Failed {
@@ -329,7 +336,7 @@ impl StreamForward {
                     self.attempts
                         .fail(&self.request.state, slot, &error, failure_class)
                         .await;
-                    next_slot = self.attempts.next_retry();
+                    next_slot = self.attempts.next_retry(&self.request.state).await;
                 }
                 SlotOutcome::Synthetic(stream) => {
                     return Ok(Some(AcceptedAttempt::Synthetic(slot.attempt, stream)));

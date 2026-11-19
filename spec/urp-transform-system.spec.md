@@ -988,7 +988,7 @@ REMS-5. The transform MUST NOT modify `request.reasoning`.
 
 ## 5. Routing and transform pipeline
 
-PIPE-1. Non-stream and stream requests MUST execute in this order:
+PIPE-1. Non-stream and stream forwarding requests MUST execute in this order. Completion-family probes use the applicable stages only, as specified by `monoize-upstream-routing.spec.md` AHS-4 and AHS-4a.
 1. decode the downstream wire payload into URP v2;
 2. resolve model suffix;
 3. route to provider and channel using waterfall plus fail-forward;
@@ -999,7 +999,7 @@ PIPE-1. Non-stream and stream requests MUST execute in this order:
 8. apply provider request-phase transforms;
 9. apply global request-phase transforms configured in system settings;
 10. apply API-key request-phase transforms;
-11. encode URP v2 to the upstream wire payload using the selected upstream model name;
+11. encode the transformed URP v2 request to the upstream wire payload, using the current `request.model`;
 12. decode the upstream response or stream into URP v2;
 13. wrap newly produced opaque encrypted reasoning payloads in `mz2.` envelopes under PR4c.3 through PR4c.5b of `spec/unified_responses_proxy.spec.md` when the API key has `reasoning_envelope_enabled = true`;
 14. apply provider response-phase transforms;

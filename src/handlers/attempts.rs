@@ -50,25 +50,30 @@ impl AttemptDriver {
 
     /// The queued same-Channel retry, else the next candidate that neither
     /// budget nor shared-origin skip excludes.
-    pub(super) fn next(&mut self) -> Option<AttemptSlot> {
-        if let Some(slot) = self.next_retry() {
+    pub(super) async fn next(&mut self, state: &AppState) -> Option<AttemptSlot> {
+        if let Some(slot) = self.next_retry(state).await {
             return Some(slot);
         }
         loop {
             let attempt = self.candidates.next()?;
-            if let Some(slot) = self.begin_slot(attempt, 0) {
+            if let Some(slot) = self.begin_slot(state, attempt, 0).await {
                 return Some(slot);
             }
         }
     }
 
-    pub(super) fn next_retry(&mut self) -> Option<AttemptSlot> {
+    pub(super) async fn next_retry(&mut self, state: &AppState) -> Option<AttemptSlot> {
         let (attempt, used) = self.retry.take()?;
-        self.begin_slot(attempt, used)
+        self.begin_slot(state, attempt, used).await
     }
 
-    fn begin_slot(&mut self, attempt: MonoizeAttempt, used: usize) -> Option<AttemptSlot> {
-        if self.should_skip(&attempt) {
+    async fn begin_slot(
+        &mut self,
+        state: &AppState,
+        attempt: MonoizeAttempt,
+        used: usize,
+    ) -> Option<AttemptSlot> {
+        if self.should_skip(&attempt) || !is_attempt_channel_healthy(state, &attempt).await {
             return None;
         }
         let channel_attempts_used = used + 1;
@@ -119,9 +124,10 @@ impl AttemptDriver {
     ) {
         self.record_terminal_failure(state, &slot, error, failure_class)
             .await;
-        if self
-            .allows_same_channel_retry(state, &slot, failure_class)
-            .await
+        if !error.target_capability
+            && self
+                .allows_same_channel_retry(state, &slot, failure_class)
+                .await
         {
             let interval_ms = slot.attempt.channel_retry_interval_ms;
             if interval_ms > 0 {
@@ -148,7 +154,8 @@ impl AttemptDriver {
             self.dispatch_duration_ms(),
             mask_sensitive_info,
         ));
-        if record_channel_failure(state, &slot.attempt, error, failure_class).await
+        if !error.target_capability
+            && record_channel_failure(state, &slot.attempt, error, failure_class).await
             && let Some(token) = shared_origin_skip_token(&slot.attempt)
         {
             self.shared_origin_skips.insert(token);

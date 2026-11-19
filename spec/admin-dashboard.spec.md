@@ -90,15 +90,14 @@ AD-2. The response MUST be a JSON object with exactly these top-level fields (`n
   - `enabled`: boolean;
   - `weight`: integer;
   - `session_affinity_auto`: boolean;
-  - `healthy`: boolean (true when no health state is tracked for the channel
-    id or any `{channel_id}::{model}` key);
+  - `healthy`: boolean, true exactly when no relevant health key is effectively
+    unhealthy (AD-2b);
   - `last_success_at`: unix-milliseconds integer or null;
-  - `cooldown_until`: unix-milliseconds integer or null;
+  - `next_recovery_at`: unix-milliseconds integer or null;
   - `probe_success_count`: integer;
   - `last_probe_at`: unix-milliseconds integer or null;
-  - `unhealthy_models`: array of model id strings whose per-model health key
-    is unhealthy or in cooldown; empty when `per_model_circuit_break` is
-    false or every model key is healthy;
+  - `unhealthy_models`: array of logical model keys, sorted ascending, whose per-model
+    key is effectively unhealthy. Empty for a Channel-level breaker;
   - `window_calls`: integer COUNT of in-window request-log rows for this
     `channel_id` (same rolling window as `spend`);
   - `window_cost_nano_usd`: nano-dollar integer string SUM of those rows'
@@ -111,11 +110,14 @@ empty string or any other value MUST return HTTP 400, code
 `invalid_spend_window`, and `param = "spend_window"` before executing any
 usage-aggregation database query.
 
-AD-2b. The in-memory channel health state stores unix seconds. The endpoint MUST
-multiply `last_success_at`, `cooldown_until`, and `last_probe_at` by 1000 before
-serialization, so that every AD-2 health timestamp is in unix milliseconds.
-`cooldown_active` MUST be true exactly when `cooldown_until` is later than the
-request time.
+AD-2b. For a Channel-level breaker, the relevant health key is the Channel's base key.
+For a per-model breaker, the relevant keys are the Channel's configured logical model
+keys. Use `monoize-upstream-routing.spec.md` HSK-10 to evaluate those keys at read time.
+`next_recovery_at` MUST be the earliest recovery timestamp among the relevant keys
+that are effectively unhealthy, or null when none are unhealthy. It denotes the next
+probe due time in `probe` mode or recovery time in `timed` mode. Multiply non-null
+`last_success_at`, `next_recovery_at`, and `last_probe_at` by `1000` to serialize Unix
+milliseconds. The former `cooldown_until` and `cooldown_active` fields are removed.
 
 AD-3. The endpoint MUST NOT expose credentials: no channel API keys, no
 provider API keys, no database passwords, no replica tokens.
@@ -183,7 +185,7 @@ localized no-usage state naming the window of the returned data
 ADF-5. The Model/channel health card header MUST render, on its first row, the title,
 the summary "{total} channels · {unhealthy} unhealthy", and at the inline end the
 "unhealthy only ({unhealthy})" toggle followed by the segmented spend-window control.
-`unhealthy` counts channels whose derived status is unhealthy or cooling-down. The toggle
+`unhealthy` counts channels whose derived status is `unhealthy` (ADF-5b). The toggle
 is a button with `aria-pressed`, is disabled when `unhealthy = 0`, and when on restricts
 the list to those channels. While `unhealthy > 0`, the "{unhealthy} unhealthy" part of the
 summary MUST be a button that turns the toggle on. When `unhealthy` falls to 0 the list
@@ -208,23 +210,21 @@ content width of 1118 CSS pixels, every column MUST be visible without horizonta
 The channel name MUST be a link to
 `/dashboard/providers?provider=<provider_id>&channel=<channel_id>`.
 
-ADF-5b. Status MUST derive from `cooldown_active`, `enabled`, and `healthy`, in this order.
-The client MUST use the server-computed `cooldown_active` (AD-2b) instead of comparing
-`cooldown_until` with the client clock. `cooldown_active = true` renders cooling-down
-(`StatusBadge variant="warning"`);
-otherwise `enabled = false` renders disabled (`Badge variant="secondary"`); otherwise
-`healthy` renders healthy (`StatusBadge variant="success"`) or unhealthy
-(`StatusBadge variant="destructive"`). When `unhealthy_models` is non-empty, the status
-cell MUST list those model ids in monospace `text-error-foreground`, truncated to one
-line with the full list in the `title` attribute.
+ADF-5b. A row MUST render `disabled` (`Badge variant="secondary"`) when `enabled = false`.
+Otherwise it MUST render `healthy` (`StatusBadge variant="success"`) when `healthy = true`
+and `unhealthy` (`StatusBadge variant="destructive"`) when `healthy = false`. The client
+MUST NOT derive status from recovery timestamps. The former `cooling` status and its
+localization keys are removed. When `unhealthy_models` is non-empty, the status cell MUST
+list those model ids in monospace `text-error-foreground`, truncated to one line with the
+full list in the `title` attribute.
 
-ADF-5d. A row whose derived status is unhealthy or cooling-down MUST render a ghost icon
+ADF-5d. A row whose derived status is `unhealthy` MUST render a ghost icon
 button (`ScrollText`, `size-11 sm:size-9`) next to the status badge, linking to
 `/dashboard/logs?channel_id=<channel_id>&status=error`, with the `aria-label` and `title`
 "view request logs of {channel}".
 
-ADF-5c. Rows MUST be ordered by status severity (unhealthy, cooling-down, disabled,
-healthy), and within one severity in endpoint order (Provider priority). The health list MUST be virtualized with `Virtuoso`, using
+ADF-5c. Rows MUST be ordered by status severity (`unhealthy`, `disabled`, `healthy`),
+and within one severity in endpoint order (Provider priority). The health list MUST be virtualized with `Virtuoso`, using
 `virtualDataListComponents` and the DL7b main pane as `customScrollParent`. Its height
 MUST equal the height of its rendered rows. In wide mode, its header row MUST be sticky
 at the top of the main pane. Each row MUST use `channel_id` as its virtual item key. An

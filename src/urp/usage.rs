@@ -89,6 +89,9 @@ pub struct OutputDetails {
 pub struct Usage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iterations: Option<Vec<UsageIteration>>,
+    /// Wire decoders can normalize missing counts to zero. Probe settlement needs to distinguish that from a reported zero.
+    #[serde(skip)]
+    pub reported_token_counts: bool,
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

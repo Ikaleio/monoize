@@ -57,8 +57,15 @@ pub fn deserialize_u64ish_default<'de, D>(deserializer: D) -> Result<u64, D::Err
 where
     D: Deserializer<'de>,
 {
+    Ok(deserialize_u64ish_optional(deserializer)?.unwrap_or(0))
+}
+
+pub(crate) fn deserialize_u64ish_optional<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
     let value = Option::<Value>::deserialize(deserializer)?;
-    Ok(value.and_then(|v| value_to_u64(&v)).unwrap_or(0))
+    Ok(value.and_then(|value| value_to_u64(&value)))
 }
 
 pub fn value_to_u64(value: &Value) -> Option<u64> {
@@ -507,6 +514,14 @@ pub fn parse_file_source_from_obj(obj: &Map<String, Value>) -> Option<FileSource
                     });
                 }
                 if let Some(data) = file.get("file_data").and_then(Value::as_str) {
+                    if data.split_once(':').is_some_and(|(scheme, _)| {
+                        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+                    }) && reqwest::Url::parse(data).is_ok()
+                    {
+                        return Some(FileSource::Url {
+                            url: data.to_owned(),
+                        });
+                    }
                     return Some(file_base64_source(
                         file.get("filename")
                             .and_then(Value::as_str)

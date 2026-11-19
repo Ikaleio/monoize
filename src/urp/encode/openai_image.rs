@@ -1,3 +1,4 @@
+use crate::urp::media::MediaError;
 use crate::urp::{
     ImageGenerationOptions, ImageSource, Node, OrdinaryRole, UrpRequest, is_internal_key,
 };
@@ -6,10 +7,10 @@ use serde_json::{Map, Value};
 
 pub fn encode_request(req: &UrpRequest, model: &str) -> Value {
     encode_request_checked(req, model)
-        .unwrap_or_else(|message| crate::urp::media::error_body(&message))
+        .unwrap_or_else(|message| crate::urp::media::error_body(message.message()))
 }
 
-pub fn encode_request_checked(req: &UrpRequest, model: &str) -> Result<Value, String> {
+pub fn encode_request_checked(req: &UrpRequest, model: &str) -> Result<Value, MediaError> {
     let prepared = prepare_request(req)?;
     if has_user_image_input(&prepared) {
         validate_edit_images(&prepared)?;
@@ -20,7 +21,7 @@ pub fn encode_request_checked(req: &UrpRequest, model: &str) -> Result<Value, St
     Ok(Value::Object(request_fields(&prepared, model)))
 }
 
-fn prepare_request(req: &UrpRequest) -> Result<UrpRequest, String> {
+fn prepare_request(req: &UrpRequest) -> Result<UrpRequest, MediaError> {
     let mut prepared =
         crate::urp::media::prepare_request(req, crate::urp::ProviderProtocol::OpenaiImage)?;
     let edit = has_user_image_input(&prepared);
@@ -223,9 +224,9 @@ fn multipart_bytes(data: &str) -> Result<MultipartBytes, String> {
         .map_err(|error| format!("invalid base64 image input: {error}"))
 }
 
-pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartField>, String> {
+pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartField>, MediaError> {
     if edit_requires_json(req) {
-        return Err("image references require a JSON image edit request".to_string());
+        return Err("image references require a JSON image edit request".into());
     }
     let prepared = prepare_request(req)?;
     let req = &prepared;
@@ -266,7 +267,7 @@ pub fn multipart_fields(req: &UrpRequest, model: &str) -> Result<Vec<MultipartFi
                 (media_type.clone(), multipart_bytes(data)?)
             }
             ImageSource::Url { .. } | ImageSource::FileId { .. } => {
-                return Err("image references require a JSON image edit request".to_string());
+                return Err("image references require a JSON image edit request".into());
             }
         };
         let field_name = if metadata.image_markup {

@@ -72,6 +72,8 @@ PRP10. A replica MUST NOT execute any migration. After `DbPool::connect()`, it M
 
 PRP11. On a replica the following write-producing startup steps MUST NOT run: `SettingsStore` default insertion and transform-rule-id canonicalization writes, `ensure_active_probe_system_user`, session-expired cleanup deletion, request-log retention deletion, and the active-probe scheduler task.
 
+PRP11a. On a replica every passive Channel breaker trip MUST use `timed` recovery, regardless of Channel `provider_type`. Compute `next_recovery_at` per `monoize-upstream-routing.spec.md` PHS-4 and PHS-5. At and after this time, routing and every status read MUST treat the key as healthy without waiting for any background task.
+
 PRP12. On a replica, `RequestLogBatcher` and `LastUsedBatcher` MUST keep identical buffering semantics, but their periodic flush MUST target the metering shipper (section 6) instead of a local database write. `ApiKeyCache` and `BalanceCache` eviction tasks run unchanged because they only evict in-memory entries.
 
 PRP13. All other initialization order (stores, runtime snapshot build, router assembly, listener bind) MUST be identical between roles.

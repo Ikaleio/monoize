@@ -94,7 +94,7 @@ pub async fn compact_response(
         channel_models,
     };
     let mut driver = AttemptDriver::new(attempts);
-    while let Some(mut slot) = driver.next() {
+    while let Some(mut slot) = driver.next(&state).await {
         let mut call = match execution.call(&mut slot.attempt).await {
             Ok(call) => call,
             Err(error) => {

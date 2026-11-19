@@ -1,4 +1,5 @@
 use super::*;
+use crate::monoize_routing::{ChannelHealthState, MonoizeChannel, RecoveryMode, recovery_wait};
 use crate::settings::BUILTIN_REASONING_EFFORT_SUFFIXES;
 use std::sync::atomic::Ordering;
 
@@ -46,16 +47,17 @@ pub(super) fn is_shared_origin_status(status: Option<u16>) -> bool {
     matches!(status, Some(502 | 503 | 524))
 }
 
-fn origin_peer_channel_ids(
-    channels: &[crate::monoize_routing::MonoizeChannel],
-    origin_key: &str,
-) -> Vec<String> {
-    channels
-        .iter()
-        .filter(|channel| channel.enabled && channel.weight > 0)
-        .filter(|channel| channel_origin_key(&channel.base_url).as_deref() == Some(origin_key))
-        .map(|channel| channel.id.clone())
-        .collect()
+fn channel_recovery_mode(
+    state: &AppState,
+    provider_type: crate::monoize_routing::MonoizeProviderType,
+) -> RecoveryMode {
+    if state.node.is_replica()
+        || provider_type == crate::monoize_routing::MonoizeProviderType::Replicate
+    {
+        RecoveryMode::Timed
+    } else {
+        RecoveryMode::Probe
+    }
 }
 
 pub(super) fn upstream_path(provider_type: ProviderType) -> &'static str {
@@ -532,7 +534,7 @@ pub(super) async fn collect_provider_attempts(
     if !crate::users::is_provider_group_eligible(&provider.group_ids, effective_groups) {
         return;
     }
-    let supporting_channels: Vec<crate::monoize_routing::MonoizeChannel> = provider
+    let supporting_channels = provider
         .channels
         .iter()
         .filter(|channel| {
@@ -549,12 +551,10 @@ pub(super) async fn collect_provider_attempts(
                 channel.provider_type,
                 &urp.model,
             ))
-        })
-        .cloned()
-        .collect();
-    let channels = filter_eligible_channels(
+        });
+    let mut channels = filter_eligible_channels(
         state,
-        &supporting_channels,
+        supporting_channels,
         provider.circuit_breaker_enabled,
         provider
             .per_model_circuit_break
@@ -565,15 +565,12 @@ pub(super) async fn collect_provider_attempts(
         return;
     }
 
-    let ordered = weighted_shuffle_channels(channels);
+    weighted_shuffle_channels(&mut channels);
     let provider_attempt_limit = if provider.max_retries == -1 {
         None
     } else {
         Some(provider.max_retries.max(0) as usize + 1)
     };
-    let max_attempts = provider_attempt_limit
-        .unwrap_or(ordered.len())
-        .min(ordered.len());
     let runtime = state.monoize_runtime.read().await;
     let selected_override = crate::monoize_routing::matching_api_type_override(
         &provider.api_type_overrides,
@@ -590,12 +587,38 @@ pub(super) async fn collect_provider_attempts(
             ))
             .cloned()
     });
-    for channel in ordered.into_iter().take(max_attempts) {
-        let origin_key = channel_origin_key(&channel.base_url);
-        let origin_peer_channel_ids = origin_key
-            .as_deref()
-            .map(|origin| origin_peer_channel_ids(&provider.channels, origin))
-            .unwrap_or_default();
+    let mut channel_origins = HashMap::new();
+    let mut origin_peers: HashMap<String, Vec<OriginPeer>> = HashMap::new();
+    for channel in provider
+        .channels
+        .iter()
+        .filter(|channel| channel.enabled && channel.weight > 0)
+    {
+        if let Some(origin) = channel_origin_key(&channel.base_url) {
+            if provider.circuit_breaker_enabled {
+                origin_peers
+                    .entry(origin.clone())
+                    .or_default()
+                    .push(OriginPeer {
+                        channel_id: channel.id.clone(),
+                        recovery_mode: channel_recovery_mode(state, channel.provider_type),
+                        probe_interval: runtime.probe_interval(provider, channel),
+                    });
+            }
+            channel_origins.insert(channel.id.as_str(), origin);
+        }
+    }
+    let origin_peers: HashMap<String, Arc<[OriginPeer]>> = origin_peers
+        .into_iter()
+        .filter(|(_, peers)| peers.len() > 1)
+        .map(|(origin, peers)| (origin, Arc::from(peers)))
+        .collect();
+    for channel in channels {
+        let origin_key = channel_origins.remove(channel.id.as_str());
+        let origin_peers = origin_key
+            .as_ref()
+            .and_then(|origin| origin_peers.get(origin))
+            .cloned();
         let model_entry = channel
             .models
             .get(&urp.model)
@@ -628,19 +651,15 @@ pub(super) async fn collect_provider_attempts(
                 .passive_window_seconds_override
                 .unwrap_or(runtime.passive_window_seconds)
                 .max(1),
-            passive_rate_limit_cooldown_seconds: channel
-                .passive_rate_limit_cooldown_seconds_override
-                .unwrap_or(runtime.passive_rate_limit_cooldown_seconds)
-                .max(1),
+            rate_limit_wait: runtime.rate_limit_wait(provider, channel),
+            probe_interval: runtime.probe_interval(provider, channel),
+            recovery_mode: channel_recovery_mode(state, channel.provider_type),
             channel_max_retries: provider.channel_max_retries,
             channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
             circuit_breaker_enabled: provider.circuit_breaker_enabled,
             per_model_circuit_break: provider.per_model_circuit_break,
             provider_attempt_limit,
-            request_timeout_ms: provider
-                .request_timeout_ms_override
-                .unwrap_or(runtime.request_timeout_ms)
-                .max(1),
+            request_timeout_ms: runtime.request_timeout(provider),
             extra_fields_whitelist: merge_extra_fields_whitelist(
                 &runtime.extra_fields_whitelist,
                 &provider.extra_fields_whitelist,
@@ -689,7 +708,7 @@ pub(super) async fn collect_provider_attempts(
                 &channel.base_url,
                 channel.session_affinity_auto,
             ),
-            websocket_supported: effective_websocket_supported(state, &channel),
+            websocket_supported: effective_websocket_supported(state, channel),
             chat_dialect: selected_override
                 .map_or(channel.chat_dialect, |entry| entry.chat_dialect)
                 .unwrap_or(urp::encode::openai_chat::ChatDialect::Generic),
@@ -698,7 +717,7 @@ pub(super) async fn collect_provider_attempts(
             session_affinity_value: None,
             client_anthropic_headers: Default::default(),
             origin_key,
-            origin_peer_channel_ids,
+            origin_peers,
         });
     }
 }
@@ -743,10 +762,13 @@ pub(super) async fn remember_websocket_supported(
         .await
     {
         Ok(true) => {
+            let _health = state.channel_health.lock().await;
             let previous = state
                 .routing_config_revision
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            attempt.routing_config_revision = previous + 1;
+            if attempt.routing_config_revision == previous {
+                attempt.routing_config_revision = previous + 1;
+            }
             attempt.websocket_supported = Some(supported);
         }
         Ok(false) => {
@@ -800,44 +822,27 @@ pub(super) fn resolve_upstream_model(
         .unwrap_or_else(|| requested_model.to_string())
 }
 
-pub(super) async fn filter_eligible_channels(
+async fn filter_eligible_channels<'a>(
     state: &AppState,
-    channels: &[crate::monoize_routing::MonoizeChannel],
+    channels: impl Iterator<Item = &'a MonoizeChannel>,
     circuit_breaker_enabled: bool,
     model: Option<&str>,
-) -> Vec<crate::monoize_routing::MonoizeChannel> {
-    let now = now_ts();
-    let health = state.channel_health.lock().await;
-    let mut out = Vec::new();
-    for channel in channels {
-        if !channel.enabled || channel.weight <= 0 {
-            continue;
-        }
-        if !circuit_breaker_enabled {
-            out.push(channel.clone());
-            continue;
-        }
-        let key = health_key(&channel.id, model);
-        if crate::monoize_routing::missing_channel_health_is_saturated(&health, &key) {
-            continue;
-        }
-        let channel_health = health
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(crate::monoize_routing::ChannelHealthState::new);
-        let is_candidate = if channel_health.healthy {
-            true
-        } else {
-            channel_health
-                .cooldown_until
-                .map(|until| now >= until)
-                .unwrap_or(true)
-        };
-        if is_candidate {
-            out.push(channel.clone());
-        }
+) -> Vec<&'a MonoizeChannel> {
+    let enabled_channels = channels.filter(|channel| channel.enabled && channel.weight > 0);
+    if !circuit_breaker_enabled {
+        return enabled_channels.collect();
     }
-    out
+    let health = state.channel_health.lock().await;
+    let now = now_ts();
+    enabled_channels
+        .filter(|channel| {
+            if let Some(model) = model {
+                channel_health_allows_routing(&health, &health_key(&channel.id, Some(model)), now)
+            } else {
+                channel_health_allows_routing(&health, &channel.id, now)
+            }
+        })
+        .collect()
 }
 
 fn attempt_health_model(attempt: &MonoizeAttempt) -> Option<&str> {
@@ -851,40 +856,44 @@ pub(super) async fn is_attempt_channel_healthy(state: &AppState, attempt: &Monoi
         return true;
     }
     let health = state.channel_health.lock().await;
-    let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
-    if crate::monoize_routing::missing_channel_health_is_saturated(&health, &key) {
-        return false;
+    let now = now_ts();
+    if let Some(model) = attempt_health_model(attempt) {
+        channel_health_allows_routing(&health, &health_key(&attempt.channel_id, Some(model)), now)
+    } else {
+        channel_health_allows_routing(&health, &attempt.channel_id, now)
     }
-    health
-        .get(&key)
-        .cloned()
-        .unwrap_or_else(crate::monoize_routing::ChannelHealthState::new)
-        .healthy
 }
 
-pub(super) fn weighted_shuffle_channels(
-    mut channels: Vec<crate::monoize_routing::MonoizeChannel>,
-) -> Vec<crate::monoize_routing::MonoizeChannel> {
-    let mut ordered = Vec::with_capacity(channels.len());
-    while !channels.is_empty() {
-        let total_weight: u64 = channels.iter().map(|c| c.weight.max(1) as u64).sum();
-        if total_weight == 0 {
-            ordered.append(&mut channels);
-            break;
-        }
-        let target = random_u64(total_weight);
-        let mut cumulative = 0u64;
-        let mut chosen = 0usize;
-        for (idx, channel) in channels.iter().enumerate() {
-            cumulative += channel.weight.max(1) as u64;
-            if target < cumulative {
-                chosen = idx;
-                break;
-            }
-        }
-        ordered.push(channels.swap_remove(chosen));
+fn channel_health_allows_routing(
+    health: &HashMap<String, ChannelHealthState>,
+    key: &str,
+    now: i64,
+) -> bool {
+    health.get(key).map_or_else(
+        || health.len() < crate::monoize_routing::channel_health_max_entries(),
+        |entry| !entry.is_unhealthy(now),
+    )
+}
+
+fn weighted_shuffle_channels(channels: &mut [&MonoizeChannel]) {
+    let mut total_weight = channels.iter().map(|channel| channel.weight as u64).sum();
+    for start in 0..channels.len().saturating_sub(1) {
+        let mut target = random_u64(total_weight);
+        let offset = channels[start..]
+            .iter()
+            .position(|channel| {
+                let weight = channel.weight as u64;
+                if target < weight {
+                    true
+                } else {
+                    target -= weight;
+                    false
+                }
+            })
+            .expect("positive candidate weights must cover the random target");
+        channels.swap(start, start + offset);
+        total_weight -= channels[start].weight as u64;
     }
-    ordered
 }
 
 pub(super) fn random_u64(bound: u64) -> u64 {
@@ -902,7 +911,21 @@ pub(super) fn random_u64(bound: u64) -> u64 {
 }
 
 pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> ProviderConfig {
-    let (auth_type, header_name, query_name) = match attempt.provider_type {
+    build_upstream_provider_config(
+        attempt.provider_type,
+        &attempt.provider_id,
+        &attempt.channel_id,
+        &attempt.base_url,
+    )
+}
+
+pub(super) fn build_upstream_provider_config(
+    provider_type: ProviderType,
+    provider_id: &str,
+    channel_id: &str,
+    base_url: &str,
+) -> ProviderConfig {
+    let (auth_type, header_name, query_name) = match provider_type {
         ProviderType::Gemini => (
             ProviderAuthType::Header,
             Some("x-goog-api-key".to_string()),
@@ -916,9 +939,9 @@ pub(super) fn build_channel_provider_config(attempt: &MonoizeAttempt) -> Provide
         _ => (ProviderAuthType::Bearer, None, None),
     };
     ProviderConfig {
-        id: format!("{}_{}", attempt.provider_id, attempt.channel_id),
-        provider_type: attempt.provider_type,
-        base_url: Some(attempt.base_url.clone()),
+        id: format!("{provider_id}_{channel_id}"),
+        provider_type,
+        base_url: Some(base_url.to_owned()),
         auth: Some(ProviderAuthConfig {
             auth_type,
             value: String::new(),
@@ -1017,14 +1040,31 @@ pub(super) fn attempt_extra_headers(
     attempt: &MonoizeAttempt,
     body: &serde_json::Value,
 ) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = provider_extra_headers(attempt.provider_type, body)
+    build_upstream_headers(
+        attempt.provider_type,
+        body,
+        attempt.extra_headers.as_ref(),
+        Some(&attempt.client_anthropic_headers),
+        resolve_session_affinity_value(attempt, body).as_deref(),
+    )
+}
+
+pub(super) fn build_upstream_headers(
+    provider_type: ProviderType,
+    body: &Value,
+    extra_headers: Option<&std::collections::BTreeMap<String, String>>,
+    client_anthropic_headers: Option<&urp::AnthropicClientHeaders>,
+    session_affinity: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = provider_extra_headers(provider_type, body)
         .iter()
         .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
         .collect();
     // PM8/PM8h: downstream anthropic headers reach only Messages upstreams; beta tokens sit
     // between generated and Channel tokens in the merged header.
-    if attempt.provider_type == ProviderType::Messages {
-        let client = &attempt.client_anthropic_headers;
+    if provider_type == ProviderType::Messages
+        && let Some(client) = client_anthropic_headers
+    {
         if let Some(version) = client.version.as_deref() {
             for (name, value) in &mut out {
                 if name.eq_ignore_ascii_case("anthropic-version") {
@@ -1036,16 +1076,14 @@ pub(super) fn attempt_extra_headers(
             out.push(("anthropic-beta".to_string(), client.beta.join(",")));
         }
     }
-    if let Some(extras) = &attempt.extra_headers {
+    if let Some(extras) = extra_headers {
         for (name, value) in extras {
             out.push((name.clone(), value.clone()));
         }
     }
     let mut beta_tokens = Vec::new();
     out.retain(|(name, value)| {
-        if attempt.provider_type != ProviderType::Messages
-            || !name.eq_ignore_ascii_case("anthropic-beta")
-        {
+        if provider_type != ProviderType::Messages || !name.eq_ignore_ascii_case("anthropic-beta") {
             return true;
         }
         for token in value
@@ -1062,10 +1100,10 @@ pub(super) fn attempt_extra_headers(
     if !beta_tokens.is_empty() {
         out.push(("anthropic-beta".to_string(), beta_tokens.join(",")));
     }
-    if let Some(value) = resolve_session_affinity_value(attempt, body) {
+    if let Some(value) = session_affinity {
         for name in SESSION_CACHE_HEADER_NAMES {
             if !header_list_contains(&out, name) {
-                out.push(((*name).to_string(), value.clone()));
+                out.push(((*name).to_string(), value.to_owned()));
             }
         }
     }
@@ -1337,6 +1375,14 @@ pub(super) fn build_exhausted_upstream_error(model: &str, tried: &[TriedProvider
         .as_deref()
         .filter(|code| !code.is_empty())
         .unwrap_or("upstream_error");
+    if last.target_capability {
+        let status = last
+            .upstream_status
+            .and_then(|status| StatusCode::from_u16(status).ok())
+            .unwrap_or(StatusCode::BAD_REQUEST);
+        return AppError::new(status, code, last.client_error.clone())
+            .with_internal_message(build_exhausted_error_detail(model, tried));
+    }
     if let Some(upstream_status @ (401 | 403 | 407)) = last.upstream_status {
         let mut err = AppError::new(
             StatusCode::BAD_GATEWAY,
@@ -1408,7 +1454,7 @@ pub(super) fn is_same_channel_retryable_app_error(err: &AppError) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RetryableFailureClass {
+pub(crate) enum RetryableFailureClass {
     RateLimited,
     Transient,
     Persistent,
@@ -1435,7 +1481,7 @@ fn normalized_failure_signal(value: Option<&str>) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-pub(super) fn classify_channel_health_failure(
+pub(crate) fn classify_channel_health_failure(
     http_status: Option<u16>,
     error_code: Option<&str>,
     error_type: Option<&str>,
@@ -1524,17 +1570,16 @@ pub(super) async fn record_channel_failure(
     };
     let shared_origin_blast = failure_class == RetryableFailureClass::Transient
         && is_shared_origin_status(app_err.upstream_status);
-    mark_channel_retryable_failure(state, attempt, failure_class).await;
-    // Sub-threshold transient failures keep the binding so prompt-cache
-    // locality survives one-off faults.
-    if attempt.affinity_hit == Some(true)
-        && !shared_origin_blast
-        && !is_attempt_channel_healthy(state, attempt).await
-    {
+    let unhealthy = record_passive_samples(
+        state,
+        attempt,
+        failure_class,
+        app_err.retry_after_seconds,
+        shared_origin_blast,
+    )
+    .await;
+    if attempt.affinity_hit == Some(true) && !shared_origin_blast && unhealthy {
         clear_channel_affinity(state, attempt).await;
-    }
-    if shared_origin_blast {
-        mark_shared_origin_peer_failures(state, attempt, failure_class).await;
     }
     shared_origin_blast
 }
@@ -1548,8 +1593,8 @@ pub(super) async fn record_midstream_terminal_failure(
     attempt: &MonoizeAttempt,
     failure_class: RetryableFailureClass,
 ) {
-    mark_channel_retryable_failure(state, attempt, failure_class).await;
-    if attempt.affinity_hit == Some(true) && !is_attempt_channel_healthy(state, attempt).await {
+    let unhealthy = record_passive_samples(state, attempt, failure_class, None, false).await;
+    if attempt.affinity_hit == Some(true) && unhealthy {
         clear_channel_affinity(state, attempt).await;
     }
 }
@@ -1592,26 +1637,18 @@ pub(super) async fn mark_channel_success(state: &AppState, attempt: &MonoizeAtte
     if !attempt.circuit_breaker_enabled {
         return;
     }
-    let now = now_ts();
     let mut health = state.channel_health.lock().await;
     if state.routing_config_revision.load(Ordering::Acquire) != attempt.routing_config_revision {
         return;
     }
     let key = health_key(&attempt.channel_id, attempt_health_model(attempt));
-    if !health.contains_key(&key)
-        && health.len() >= crate::monoize_routing::channel_health_max_entries()
-    {
+    if !crate::monoize_routing::prepare_channel_health_insert(&mut health, &key) {
         return;
     }
-    let entry = health
-        .entry(key)
-        .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
-    let was_unhealthy = !entry.healthy;
-    entry.healthy = true;
-    entry.cooldown_until = None;
-    entry.last_success_at = Some(now);
-    entry.probe_success_count = 0;
-    entry.last_probe_at = None;
+    let entry = health.entry(key).or_default();
+    let now = now_ts();
+    let was_unhealthy = entry.is_unhealthy(now);
+    entry.mark_success(now);
     prune_passive_failure_timestamps(
         &mut entry.passive_failure_timestamps,
         now,
@@ -1622,93 +1659,114 @@ pub(super) async fn mark_channel_success(state: &AppState, attempt: &MonoizeAtte
     }
 }
 
-pub(super) async fn mark_channel_retryable_failure(
-    state: &AppState,
-    attempt: &MonoizeAttempt,
+struct PassiveSample {
+    now: i64,
     failure_class: RetryableFailureClass,
-) {
-    apply_retryable_failure_to_channel(state, attempt, &attempt.channel_id, failure_class, true)
-        .await;
+    retry_after_seconds: Option<u16>,
 }
 
-async fn mark_shared_origin_peer_failures(
+async fn record_passive_samples(
     state: &AppState,
     attempt: &MonoizeAttempt,
     failure_class: RetryableFailureClass,
-) {
-    let mut peer_count = 0usize;
-    for peer_id in &attempt.origin_peer_channel_ids {
-        if peer_id == &attempt.channel_id {
-            continue;
-        }
-        apply_retryable_failure_to_channel(state, attempt, peer_id, failure_class, false).await;
-        peer_count += 1;
+    retry_after_seconds: Option<u16>,
+    blast: bool,
+) -> bool {
+    if !attempt.circuit_breaker_enabled {
+        return false;
     }
-    if peer_count > 0 {
+    let mut health = state.channel_health.lock().await;
+    if state.routing_config_revision.load(Ordering::Acquire) != attempt.routing_config_revision {
+        return false;
+    }
+    let sample = PassiveSample {
+        now: now_ts(),
+        failure_class,
+        retry_after_seconds,
+    };
+    let unhealthy = apply_retryable_failure_to_channel(&mut health, attempt, &sample, None);
+    if blast && let Some(peers) = &attempt.origin_peers {
+        for peer in peers
+            .iter()
+            .filter(|peer| peer.channel_id != attempt.channel_id)
+        {
+            apply_retryable_failure_to_channel(&mut health, attempt, &sample, Some(peer));
+        }
         tracing::info!(
             channel_id = %attempt.channel_id,
             origin_key = attempt.origin_key.as_deref().unwrap_or(""),
-            peer_count,
+            peer_count = peers.len() - 1,
             "shared-origin blast applied to same-base-url channels"
         );
     }
+    unhealthy
 }
 
-async fn apply_retryable_failure_to_channel(
-    state: &AppState,
+fn apply_retryable_failure_to_channel(
+    health: &mut HashMap<String, ChannelHealthState>,
     attempt: &MonoizeAttempt,
-    channel_id: &str,
-    failure_class: RetryableFailureClass,
-    log_threshold: bool,
-) {
-    if !attempt.circuit_breaker_enabled {
-        return;
-    }
-    let now = now_ts();
-    let mut health = state.channel_health.lock().await;
-    if state.routing_config_revision.load(Ordering::Acquire) != attempt.routing_config_revision {
-        return;
-    }
+    sample: &PassiveSample,
+    peer: Option<&OriginPeer>,
+) -> bool {
+    let channel_id = peer.map_or(attempt.channel_id.as_str(), |peer| peer.channel_id.as_str());
     let key = health_key(channel_id, attempt_health_model(attempt));
-    if !crate::monoize_routing::prepare_channel_health_insert(&mut health, &key) {
-        return;
+    if !crate::monoize_routing::prepare_channel_health_insert(health, &key) {
+        return false;
     }
-    let entry = health
-        .entry(key)
-        .or_insert_with(crate::monoize_routing::ChannelHealthState::new);
+    let entry = health.entry(key).or_default();
     prune_passive_failure_timestamps(
         &mut entry.passive_failure_timestamps,
-        now,
+        sample.now,
         attempt.passive_window_seconds,
     );
     let failure_threshold = crate::monoize_routing::effective_passive_failure_threshold(
         attempt.passive_failure_count_threshold,
     );
-    if entry.passive_failure_timestamps.len() < failure_threshold {
-        entry.passive_failure_timestamps.push_back(now);
+    let samples = &mut entry.passive_failure_timestamps;
+    if samples.len() > failure_threshold {
+        samples.drain(..samples.len() - failure_threshold);
     }
-
+    if samples.len() < failure_threshold {
+        samples.push_back(sample.now);
+    }
+    if entry.is_unhealthy(sample.now) {
+        return true;
+    }
     let failure_samples = entry.passive_failure_timestamps.len();
-    if failure_class == RetryableFailureClass::Persistent || failure_samples >= failure_threshold {
-        entry.healthy = false;
-        let cooldown_seconds = if failure_class == RetryableFailureClass::RateLimited {
-            attempt.passive_rate_limit_cooldown_seconds
-        } else {
-            attempt.passive_cooldown_seconds
-        };
-        entry.cooldown_until = Some(now + cooldown_seconds as i64);
-        entry.probe_success_count = 0;
-        entry.last_probe_at = None;
-        if log_threshold {
-            tracing::info!(
-                channel_id = %channel_id,
-                failure_class = ?failure_class,
-                failed_samples = failure_samples,
-                cooldown_seconds,
-                "channel marked unhealthy after passive breaker failure"
-            );
-        }
+    if sample.failure_class != RetryableFailureClass::Persistent
+        && failure_samples < failure_threshold
+    {
+        return false;
     }
+    let mode = peer.map_or(attempt.recovery_mode, |peer| peer.recovery_mode);
+    let ordinary_wait = match mode {
+        RecoveryMode::Probe => peer.map_or(attempt.probe_interval, |peer| peer.probe_interval),
+        RecoveryMode::Timed => attempt.passive_cooldown_seconds,
+    };
+    let rate_limited = sample.failure_class == RetryableFailureClass::RateLimited;
+    let wait = recovery_wait(
+        ordinary_wait,
+        attempt.rate_limit_wait,
+        rate_limited,
+        sample.retry_after_seconds,
+    );
+    entry.trip(
+        sample.now,
+        mode,
+        rate_limited,
+        sample.retry_after_seconds,
+        wait,
+    );
+    if peer.is_none() {
+        tracing::info!(
+            channel_id = %channel_id,
+            failure_class = ?sample.failure_class,
+            failed_samples = failure_samples,
+            recovery_wait_seconds = wait,
+            "channel marked unhealthy after passive breaker failure"
+        );
+    }
+    true
 }
 pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info: bool) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
@@ -1764,6 +1822,7 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
         app_err = app_err.with_param(param);
     }
     app_err.forwarded_headers = forwarded_headers;
+    app_err.retry_after_seconds = err.retry_after_seconds;
     app_err
 }
 
@@ -1860,7 +1919,7 @@ pub(super) fn responses_stream_error_json(seq: u64, err: &AppError) -> Value {
     event
 }
 
-fn merge_extra_fields_whitelist(
+pub(super) fn merge_extra_fields_whitelist(
     global: &std::collections::HashMap<String, Vec<String>>,
     provider_override: &Option<Vec<String>>,
     effective_type: crate::monoize_routing::MonoizeProviderType,

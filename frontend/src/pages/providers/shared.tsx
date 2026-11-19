@@ -34,10 +34,11 @@ export type ChannelRow = {
 	passive_cooldown_seconds_override: number | null
 	passive_window_seconds_override: number | null
 	passive_rate_limit_cooldown_seconds_override: number | null
-	active_probe_enabled_override: boolean | null
+	honor_rate_limit_override: boolean | null
 	active_probe_interval_seconds_override: number | null
 	active_probe_success_threshold_override: number | null
 	active_probe_model_override: string
+	active_probe_stream_override: boolean | null
 	affinity_enabled_override: boolean | null
 	affinity_idle_ttl_seconds_override: number | null
 	affinity_failback_mode_override: AffinityFailbackMode | null
@@ -58,10 +59,11 @@ export type ProviderForm = {
 	channel_retry_interval_ms: number
 	circuit_breaker_enabled: boolean
 	per_model_circuit_break: boolean
-	active_probe_enabled_override: boolean | null
+	honor_rate_limit_override: boolean | null
 	active_probe_interval_seconds_override: number | null
 	active_probe_success_threshold_override: number | null
 	active_probe_model_override: string
+	active_probe_stream_override: boolean | null
 	request_timeout_ms_override: number | null
 	extra_fields_whitelist: string[]
 	strip_cross_protocol_nested_extra: boolean | null
@@ -117,10 +119,11 @@ export function emptyChannelRow(): ChannelRow {
 		passive_cooldown_seconds_override: null,
 		passive_window_seconds_override: null,
 		passive_rate_limit_cooldown_seconds_override: null,
-		active_probe_enabled_override: null,
+		honor_rate_limit_override: null,
 		active_probe_interval_seconds_override: null,
 		active_probe_success_threshold_override: null,
 		active_probe_model_override: '',
+		active_probe_stream_override: null,
 		affinity_enabled_override: null,
 		affinity_idle_ttl_seconds_override: null,
 		affinity_failback_mode_override: null,
@@ -143,10 +146,11 @@ export function emptyForm(): ProviderForm {
 		channel_retry_interval_ms: 0,
 		circuit_breaker_enabled: true,
 		per_model_circuit_break: false,
-		active_probe_enabled_override: null,
+		honor_rate_limit_override: null,
 		active_probe_interval_seconds_override: null,
 		active_probe_success_threshold_override: null,
 		active_probe_model_override: '',
+		active_probe_stream_override: null,
 		request_timeout_ms_override: null,
 		extra_fields_whitelist: [],
 		strip_cross_protocol_nested_extra: null,
@@ -171,10 +175,11 @@ export function fromProvider(provider: Provider): ProviderForm {
 		channel_retry_interval_ms: provider.channel_retry_interval_ms ?? 0,
 		circuit_breaker_enabled: provider.circuit_breaker_enabled ?? true,
 		per_model_circuit_break: provider.per_model_circuit_break ?? false,
-		active_probe_enabled_override: provider.active_probe_enabled_override ?? null,
+		honor_rate_limit_override: provider.honor_rate_limit_override ?? null,
 		active_probe_interval_seconds_override: provider.active_probe_interval_seconds_override ?? null,
 		active_probe_success_threshold_override: provider.active_probe_success_threshold_override ?? null,
 		active_probe_model_override: provider.active_probe_model_override ?? '',
+		active_probe_stream_override: provider.active_probe_stream_override ?? null,
 		request_timeout_ms_override: provider.request_timeout_ms_override ?? null,
 		extra_fields_whitelist: provider.extra_fields_whitelist ?? [],
 		strip_cross_protocol_nested_extra: provider.strip_cross_protocol_nested_extra ?? null,
@@ -201,10 +206,11 @@ export function fromProvider(provider: Provider): ProviderForm {
 			passive_cooldown_seconds_override: channel.passive_cooldown_seconds_override ?? null,
 			passive_window_seconds_override: channel.passive_window_seconds_override ?? null,
 			passive_rate_limit_cooldown_seconds_override: channel.passive_rate_limit_cooldown_seconds_override ?? null,
-			active_probe_enabled_override: channel.active_probe_enabled_override ?? null,
+			honor_rate_limit_override: channel.honor_rate_limit_override ?? null,
 			active_probe_interval_seconds_override: channel.active_probe_interval_seconds_override ?? null,
 			active_probe_success_threshold_override: channel.active_probe_success_threshold_override ?? null,
 			active_probe_model_override: channel.active_probe_model_override ?? '',
+			active_probe_stream_override: channel.active_probe_stream_override ?? null,
 			affinity_enabled_override: channel.affinity_enabled_override ?? null,
 			affinity_idle_ttl_seconds_override: channel.affinity_idle_ttl_seconds_override ?? null,
 			affinity_failback_mode_override: channel.affinity_failback_mode_override ?? null,
@@ -236,16 +242,16 @@ export function providerRoutingSummary(position: number, maxRetries: number, t: 
 	return `${t('providers.position', { position: position + 1 })} · ${retries}`
 }
 
-/** Server-side probe-model resolution (channel-management §3.8) mirrored for the quick-test hint. */
+/** Mirror AHS-3 for the quick-test hint. */
 export function resolveQuickTestModel(
 	channel: MonoizeChannel,
 	provider: Provider,
 	globalProbeModel: string | null | undefined
 ): string | undefined {
-	return channel.active_probe_model_override
-		|| provider.active_probe_model_override
-		|| globalProbeModel
-		|| Object.keys(channel.models ?? {}).sort()[0]
+	const configured = channel.active_probe_model_override ?? provider.active_probe_model_override ?? globalProbeModel
+	if (configured != null && Object.hasOwn(channel.models, configured)) return configured
+
+	return Object.keys(channel.models).sort()[0]
 }
 
 // MP-R3: a model counts as priced when its enabled `model_prices` row is
@@ -287,7 +293,7 @@ export function hasBillablePricingModelId(
 	return pricedModelIdSet.has(pricing) || (pricing !== logical && pricedModelIdSet.has(logical))
 }
 
-export type HealthStatus = 'healthy' | 'probing' | 'unhealthy'
+export type HealthStatus = NonNullable<MonoizeChannel['_health_status']>
 export type EffectiveChannelStatus = 'disabled' | 'no_traffic' | HealthStatus | 'unsaved'
 
 /** PL18b: one status per Channel; disabled and zero weight hide health. */
@@ -296,17 +302,15 @@ export function effectiveChannelStatus(
 	weight: number,
 	health: HealthStatus | undefined
 ): EffectiveChannelStatus {
+	if (health === undefined) return 'unsaved'
 	if (!enabled) return 'disabled'
-	if (weight <= 0) return 'no_traffic'
-	return health ?? 'unsaved'
+	if (weight === 0) return 'no_traffic'
+	return health
 }
 
-export function healthBadge(status: HealthStatus, t: TFunction) {
+function healthBadge(status: HealthStatus, t: TFunction) {
 	if (status === 'healthy') {
 		return <StatusBadge variant='success'><StatusDot variant='success' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusHealthy')}</StatusBadge>
-	}
-	if (status === 'probing') {
-		return <StatusBadge variant='warning'><StatusDot variant='warning' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusProbing')}</StatusBadge>
 	}
 	return <StatusBadge variant='destructive'><StatusDot variant='destructive' className='mr-1.5 h-1.5 w-1.5 animate-pulse' />{t('providers.statusUnhealthy')}</StatusBadge>
 }

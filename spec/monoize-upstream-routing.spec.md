@@ -27,11 +27,7 @@ A channel record MUST include:
 - `weight: integer` where `weight >= 0` and default `1`
 - `enabled: boolean` default `true`
 
-Runtime-only state MUST be maintained in memory:
-
-- `_healthy: boolean` default `true`
-- `_last_success_at: timestamp | null`
-- `_passive_failure_timestamps: sequence<timestamp>`
+Runtime-only health state MUST be maintained in memory per HSK-1 through HSK-10.
 
 Channel-level passive breaker override fields MAY be present:
 
@@ -115,25 +111,32 @@ The router subsystem MUST support:
 
 CFG-1. Provider configuration decoding MUST be fail-fast: invalid serialized provider fields (including `transforms`, `created_at`, `updated_at`) MUST return an explicit error and MUST NOT be silently coerced to defaults. Every persisted Provider or Channel integer-backed boolean MUST be exactly `0` or `1`; any other integer MUST fail decoding.
 
-CFG-2. Each provider MAY define probe override fields:
+CFG-2. A Provider or Channel MAY define these nullable active-probe overrides:
 
-- `active_probe_enabled_override: boolean?`
 - `active_probe_interval_seconds_override: integer? (>= 1)`
 - `active_probe_success_threshold_override: integer? (>= 1)`
 - `active_probe_model_override: string?`
+- `active_probe_stream_override: boolean | null`
 
-CFG-3. Probe precedence MUST be provider override first, then global settings fallback.
+CFG-3. The global probe settings are:
 
-CFG-3a. Each channel MAY define the same active probe override fields. Active probe precedence MUST be channel override, then provider override, then global settings fallback.
+- `monoize_active_probe_interval_seconds`: integer seconds, minimum `1`, default `30`;
+- `monoize_active_probe_success_threshold`: integer count, minimum `1`, default `1`;
+- `monoize_active_probe_model`: nullable string, default `null`;
+- `monoize_active_probe_stream`: boolean, default `true`.
 
-CFG-4. Global active probe settings MUST be treated as defaults. If global `enabled == false`, channels or providers with `active_probe_enabled_override == true` MUST still be active-probed. If a channel or provider resolves `active_probe_enabled_override == false`, that channel MUST remain excluded regardless of global value.
+CFG-3a. For each probe setting, the effective value MUST be the first non-null value in this order: Channel override, Provider override, global setting. If the global probe model is null and neither override is set, the effective configured probe model is null. An explicit `false` stream override MUST win over lower-priority values. For completion-family probes (AHS-4), the effective stream value is the scheduler's initial stream flag. It is also the dashboard Channel test's initial flag when the request omits `stream` (CM-CH-TEST-1).
+
+CFG-4. Active probes MUST use the Provider circuit-breaker flag and the eligibility rules in §6.3. The global `monoize_active_probe_enabled` setting and the Provider and Channel `active_probe_enabled_override` fields are removed. They MUST NOT be accepted, returned, persisted, or treated as aliases. Remove the corresponding runtime configuration, entity, decode, store, UI type, form, and localization fields. No startup default or end-to-end seed may set the removed fields.
+
+CFG-4a. The global setting `monoize_honor_rate_limit` is boolean and defaults to `false`. A Provider or Channel MAY define `honor_rate_limit_override: boolean | null`. The effective value for a Channel MUST be the first non-null value in this order: Channel override, Provider override, global setting. An explicit `false` is a value, not an inheritance marker.
 
 CFG-5. Passive breaker effective parameters MUST be resolved per channel with precedence:
 
 1. channel override field (if present and non-null)
 2. global passive breaker setting
 
-The resolved parameters are: `passive_failure_count_threshold`, `passive_window_seconds`, `passive_cooldown_seconds`, `passive_rate_limit_cooldown_seconds`.
+The resolved parameters are `passive_failure_count_threshold`, `passive_window_seconds`, `passive_cooldown_seconds`, and `passive_rate_limit_cooldown_seconds`. The threshold is a count; the other parameters are waits in seconds. For health recovery, resolve `passive_rate_limit_cooldown_seconds` only when the Channel's effective honor-rate-limit setting is `true` (CFG-4a).
 
 CFG-5a. `MONOIZE_CHANNEL_PASSIVE_FAILURE_SAMPLE_MAX_ENTRIES` MUST configure the positive process-local maximum passive-failure threshold per health-state entry. An unset, empty, zero, negative, invalid, or overflowing value MUST use `1024`.
 
@@ -150,7 +153,7 @@ CFG-6a. Let `T` be the resolved `request_timeout_ms` of an attempt. Upstream HTT
 3. For a call of item 2, Monoize MUST NOT apply a total deadline to the 2xx body. The only body bound is `monoize_stream_idle_timeout_ms`: each wait for the next SSE event, WebSocket frame, or JSON body chunk MUST end with `upstream_idle_timeout` when it exceeds that value. A stream that keeps delivering data within the idle bound MAY last indefinitely.
 4. A deadline failure of item 1 or item 2 is a transport failure (`upstream-error-sanitization.spec.md` SAN-D3 `transport`).
 
-Active probes keep one total deadline of `T` ms and are outside CFG-6a.
+Active probes and dashboard Channel liveness tests keep one total deadline of `T` ms (AHS-3b) and are outside CFG-6a.
 
 ## 3. Request Routing Parameters
 
@@ -186,7 +189,8 @@ RTA-2. Static filter rules for each provider:
 
 RTA-3. Availability pre-check:
 
-- candidate channels are those where `enabled == true`, `weight > 0`, `models` contains the requested logical model, the Channel model multiplier does not exceed request `max_multiplier` when present, and runtime state is healthy/probing-eligible for the requested model (see §6.3 for per-model health keying).
+- candidate Channels MUST have `enabled == true` and `weight > 0`. `models` MUST contain the requested logical model, and its multiplier MUST NOT exceed the request `max_multiplier` when present.
+- if `provider.circuit_breaker_enabled == true`, the effective health status of the requested model's key (HSK-1, HSK-2, HSK-10) MUST NOT be `unhealthy`. An elapsed probe due time MUST NOT make an unhealthy key eligible. HSK-7 still applies at capacity.
 - if `provider.circuit_breaker_enabled == false`, runtime health state MUST be ignored for normal routing eligibility. Disabled or zero-weight channels are still excluded.
 - if candidate channels are empty, skip provider.
 
@@ -200,7 +204,7 @@ RTA-4. Execute provider with intra-provider retry:
   - else: `max_retries + 1` total attempts across all channels
 - per-channel attempt limit: `channel_max_retries + 1` (default `0 + 1 = 1`, i.e. one attempt per channel with no intra-channel retry)
 - execution is nested: for each channel in weighted order, try up to per-channel limit, then move to next channel, all bounded by total attempt budget
-- if the channel becomes unhealthy (breaker trips) during intra-channel retries, remaining retries on that channel MUST be aborted and execution MUST move to the next channel
+- before every dispatch, including intra-Channel retries, the router MUST exclude a Channel whose relevant key is effectively `unhealthy` when the Provider circuit breaker is enabled. A skipped Channel MUST NOT consume an attempt.
 - after a shared-origin blast defined by RTA-6c, remaining not-yet-attempted Channels of that Provider whose origin key equals the failed Channel's origin key MUST be skipped for this request without consuming the Provider attempt budget
 - between intra-channel retry attempts on the same channel, the router MUST sleep for `channel_retry_interval_ms` milliseconds. If `channel_retry_interval_ms == 0` (default), no sleep is inserted.
 
@@ -219,7 +223,8 @@ RTA-5. Error policy per attempt:
 - Every upstream HTTP, timeout, connection, response-decoding, or response-validation error that occurs before the first downstream byte MUST end the current attempt. Monoize MUST continue routing until an attempt succeeds or all eligible attempts are exhausted.
 - HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, and connection errors MAY retry the same Channel. Same-Channel retries MUST remain within RTA-4 limits.
 - Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, MUST NOT retry the same Channel. They MUST still advance to the next eligible Channel or Provider.
-- A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing. Monoize MUST NOT classify such an error as an upstream attempt failure.
+- A target-capability failure MUST end only the current attempt (RTA-5e).
+- A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error other than RTA-5e MUST stop routing. Monoize MUST NOT classify such an error as an upstream attempt failure.
 
 RTA-5a. A persistent Channel failure is an upstream failure that satisfies at least one condition below:
 
@@ -231,6 +236,17 @@ A persistent Channel failure MUST NOT authorize a same-Channel retry. HTTP `400`
 RTA-5b. A structured upstream `code` or `type` equal to `rate_limit_error`, `rate_limit_exceeded`, or `too_many_requests` MUST have the RateLimited passive-failure class. A structured upstream `code` or `type` equal to `overloaded_error`, `server_error`, `service_unavailable`, or `temporarily_unavailable` MUST have the Transient passive-failure class. Signal comparison uses the normalization in RTA-5a. HTTP `429` MUST take the RateLimited class regardless of structured signals. An RTA-5a persistent HTTP status MUST take the Persistent class regardless of structured signals. For all other statuses, a persistent structured signal takes precedence over a Transient HTTP status or structured signal.
 
 RTA-5c. If the effective Channel proxy cannot construct an HTTP client, Monoize MUST fail that attempt with `upstream_proxy_config_invalid`, record it in `tried_providers`, and advance to the next eligible Channel or Provider. It MUST NOT fall back to a direct connection, retry the same Channel, or record a passive-health failure sample.
+
+RTA-5d. Forwarding attempts and active probes MUST use the same Retry-After parser. Inputs are the response headers and the wall-clock time at parsing. The parser MUST use the first applicable case below, and clamp a present result to at most `3600` seconds:
+
+1. A non-negative integer `retry-after-ms` value gives `ceil(value / 1000)` seconds.
+2. Otherwise, a non-negative integer `retry-after` value gives that number of seconds.
+3. Otherwise, a valid `retry-after` HTTP-date gives `max(0, date_s - now_s)`, where `date_s` and `now_s` are whole Unix seconds for the HTTP-date and the parse time, respectively.
+4. Otherwise, the result is absent.
+
+Forwarding attempts MUST use the headers of non-stream HTTP error responses and pre-commit stream error responses whose HTTP headers are available. In-stream terminal errors have no Retry-After. Active probes MUST use the headers of their own HTTP response, if available.
+
+RTA-5e. A target-capability failure is a rejection in `media-transport.spec.md` MT20a while preparing a selected forwarding attempt. It MUST occur before any upstream bytes are sent for that attempt. Count the failed attempt against the existing RTA-4 Provider attempt budget and record exactly one `tried_providers` entry with its existing error code and message (RL17, SAN-5). Do not retry the same Channel, including with a bound-target extra retry under RTA-4a. Do not record a passive health sample, trigger a shared-origin blast, or clear affinity. Advance to the next eligible Channel or Provider under the existing attempt limits and order. A pre-dispatch error outside MT20a MUST NOT take this path merely because it has the same status or code.
 
 RTA-6. On an HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, connection failure, RTA-5a persistent failure, or RTA-5b structured failure, Channel passive health state MUST be updated. A persistent failure MUST mark the relevant health entry unhealthy after its first occurrence. A Transient or RateLimited failure MUST use the threshold in PHS-3.
 
@@ -245,7 +261,7 @@ RTA-6c. Shared-origin blast. When a retryable failure's upstream HTTP status is 
 3. Remaining same-Channel retries and remaining not-yet-attempted same-origin Channels of that Provider MUST be skipped for the rest of this request.
 4. HTTP `408` and HTTP `429` MUST NOT trigger a shared-origin blast. They remain per-Channel.
 
-RTA-6d. A shared-origin blast MUST classify cooldown as Transient (`passive_cooldown_seconds`), not as the rate-limit cooldown.
+RTA-6d. A shared-origin blast MUST classify the passive sample as Transient, not RateLimited. Its initial recovery wait MUST use the non-rate-limit branch for the affected key's recovery mode (PHS-4, PHS-5).
 
 RTA-7. If all attempts in Provider fail before the first downstream byte, router MUST continue with the next Provider. The status code of an upstream failure MUST NOT stop cross-Provider fail-forward.
 
@@ -262,6 +278,8 @@ With zero recorded attempts the error is status `502`, code `upstream_error`, ty
 RTA-8b. Channel credential failures. If `LAST.upstream_status` is `401`, `403`, or `407`, the failure belongs to the Channel credential or permission, not to the client. RTA-8 and RTA-8a do not apply. The terminal `AppError` MUST be status `502`, `code = "upstream_error"`, `type = "server_error"` (Messages: `api_error` through SE1c), `param = null`, and the RTA-8 `message`. The upstream code and type MUST NOT appear in `code` or `type`, because clients treat them as a login failure. The body MUST carry the diagnostics `upstream_status` (the original status) and `upstream_code` (the non-empty code reported by the upstream, omitted only when the upstream reported none; a reported value of `upstream_error` is retained). Request-log `error_code` and `error_http_status` MUST equal the downstream values; `tried_providers` keeps the original status and code. A WebSocket error frame uses the same status, code, and type. A 401 for the client's own Monoize key is a local failure and stays `401`. Every other upstream status, including 400, 404, 409, 413, 422, 429, and every `5xx`, follows RTA-8.
 
 RTA-8a. If the final failed attempt has `upstream_code = "thinking_signature_invalid"` and its status is not a valid HTTP `4xx` status, Monoize MUST return HTTP `400` instead of the RTA-8 status. The request log `error_code` and `error_http_status` MUST equal the downstream values; the request log `error_message` MUST equal the persisted internal detail per `spec/upstream-error-sanitization.spec.md` SAN-8 and SAN-9.
+
+RTA-8c. When routing is exhausted and the last failed attempt is a target-capability failure, return that attempt's existing local HTTP status and error code. Use its existing message as the client error under SAN-5 and SAN-6 without substituting a generic routing error. If the last failed attempt has another class, its existing exhaustion rule still applies. The terminal request log MUST use the returned status and code.
 
 ## 5. Streaming-specific Rule
 
@@ -375,11 +393,29 @@ HSK-3. Eligibility filtering (RTA-3) MUST use the appropriate health key when de
 
 HSK-4. A provider update MUST remove runtime health state for every channel in both the pre-update and post-update provider. A provider delete MUST remove runtime health state for every deleted channel.
 
-HSK-5. Each upstream attempt and active probe MUST capture the routing-configuration revision used to create it. After a provider create, update, delete, or reorder increments that revision, an attempt or probe with an older revision MUST NOT create or update channel health state.
+HSK-5. Each upstream attempt and active probe MUST capture the routing configuration revision used to create it. After the revision advances, an attempt or probe with an older revision MUST NOT create or update Channel health state. This includes a Provider create, update, delete, or reorder, a Channel enable change (CM-CH-EN-1), and a health-setting mutation (R-H-9).
 
 HSK-6. `MONOIZE_CHANNEL_HEALTH_MAX_ENTRIES` MUST configure the positive process-local health-map limit. An unset, empty, zero, negative, or invalid value MUST use `10000`.
 
 HSK-7. A health update MUST NOT increase the map beyond HSK-6. At capacity, a new key MUST NOT be inserted or evict an existing key. Every missing health key MUST be treated as ineligible until an entry slot becomes available. Capacity checks MUST be constant-time and MUST NOT scan the health map.
+
+HSK-8. The only Channel health display statuses are `healthy`, `unhealthy`, and `disabled`. Display status MUST be `disabled` if and only if `Channel.enabled = false`; a runtime health key itself is never `disabled`. Otherwise the display status MUST reflect effective runtime health. `no_traffic` is a separate Provider-page badge, not a health status (PL18b). The former `probing` status is removed from runtime state, API enums, UI, and documentation.
+
+HSK-9. Each runtime health key MUST store the following state. Timestamps are wall-clock instants expressed in whole Unix seconds. Waits in the recovery formulas are also in whole seconds.
+
+- `healthy: boolean`, initially `true`;
+- `last_success_at: timestamp | null`, initially null, the most recent successful attempt or test that made or kept the key healthy;
+- `passive_failure_timestamps: sequence<timestamp>`, initially empty, the queue maintained by PHS-1;
+- `probe_success_count: integer`, initially `0`, the number of consecutive successful active probes for the current trip;
+- `last_probe_at: timestamp | null`, initially null, the time of the most recent applied probe result for the current trip;
+- `trip_id: u64 | null`, initially null, the unique identity of the current trip. Assign each new trip a value from one process-local, monotonically increasing counter. A trip id MUST NOT be reused within the process, including after a health-map clear. A healthy key has no current trip id;
+- `trip_time: timestamp | null`, initially null, the wall-clock time of the current healthy-to-unhealthy transition, denoted by `t`;
+- `trip_rate_limited: boolean`, initially `false`, whether the failure that caused the current trip was RateLimited (`rl`);
+- `trip_retry_after_seconds: integer | null`, initially null, the parsed Retry-After of that failure (`ra`, `0..=3600` seconds, RTA-5d);
+- `recovery_mode: enum("probe","timed") | null`, initially null, the mode selected for the current trip (PHS-4);
+- `next_recovery_at: timestamp | null`, initially null, the next probe due time in `probe` mode or the time when the key becomes healthy in `timed` mode.
+
+HSK-10. An absent key has status `healthy` for status reads, subject to the separate routing capacity check in HSK-7. For an existing key, its effective status at read time is `unhealthy` exactly when `healthy = false` and either `recovery_mode = probe` or read time is before `next_recovery_at` in `timed` mode. The effective status is `healthy` otherwise. An elapsed timed trip is no longer current, even if the expired trip data has not yet been cleared from memory. When the Provider circuit breaker is off, routing and Channel availability ignore these runtime values (RTA-3, CM-HEALTH-2).
 
 ### 6.2 Passive
 
@@ -392,43 +428,65 @@ PHS-1. On each breaker-relevant failure, the health state entry MUST prune failu
 
 PHS-2. A successful attempt MUST NOT append a passive sample. If `provider.circuit_breaker_enabled == false`, success and failure handling MUST return without inserting or modifying a Channel health entry.
 
-PHS-3. A Persistent failure MUST make the health state entry unhealthy immediately. Otherwise the entry MUST become unhealthy when its failure-timestamp queue length reaches the effective threshold. Failure-count evaluation MUST read the queue length in constant time and MUST NOT scan the queue. The queue length MUST NOT exceed the effective threshold.
+PHS-3. Only the passive failure rules may transition a key from healthy to unhealthy. On a Persistent failure, a currently healthy key MUST become unhealthy immediately. On a Transient or RateLimited failure, a currently healthy key MUST become unhealthy when its failure-timestamp queue length reaches the effective threshold. Evaluate current health per HSK-10. Failure-count evaluation MUST read the queue length in constant time and MUST NOT scan the queue. The queue length MUST NOT exceed the effective threshold.
 
-PHS-4. When unhealthy is triggered by HTTP `429` or an RTA-5b rate-limit signal, cooldown MUST use `rate_limit_cooldown_seconds`. Otherwise cooldown MUST use `cooldown_seconds`.
+PHS-4. At a PHS-3 transition the router MUST write `healthy = false`, allocate a new `trip_id` (HSK-9), record `t`, `rl`, and `ra`, reset `probe_success_count` to `0` and `last_probe_at` to null, and set the mode and `next_recovery_at`. The mode MUST be `probe` only on the primary and only for a Channel whose `provider_type != replicate`. The mode MUST be `timed` on replicas and for `replicate` Channels on either node. Use Channel `provider_type`, not a model API type override. Set `rl = true` exactly when the triggering failure is RateLimited (HTTP `429` or an RTA-5b rate-limit signal under its classification rules), and set `ra` to the RTA-5d result. A failure while the key is effectively unhealthy MUST NOT replace the recorded trip or its recovery time.
 
-PHS-5. Unhealthy state entries MUST NOT receive normal traffic while `now < cooldown_until`.
+PHS-5. Let `honor` be the Channel's effective value from CFG-4a, and `interval` its effective interval from CFG-3a in seconds. If `honor && rl`, the initial wait in either mode MUST be `max(passive_rate_limit_cooldown_seconds, ra)` with absent `ra` treated as `0`. Otherwise the initial wait MUST be `interval` in `probe` mode or `passive_cooldown_seconds` in `timed` mode. Resolve the two passive waits per CFG-5 (RTA-6c for shared-origin samples). The runtime MUST NOT consult `passive_rate_limit_cooldown_seconds` for recovery when `honor = false`. Set `next_recovery_at = t + initial_wait`, adding the wait in seconds. For `timed` mode, routing and every status read MUST treat the key as healthy at and after that time without waiting for a background task. For `probe` mode, reaching that time only makes the key due for a probe (AHS-1).
 
-PHS-6. On successful attempts, the health state entry MUST be restored to healthy immediately: `healthy := true`, `cooldown_until := None`, `probe_success_count := 0`, `last_probe_at := None`.
+PHS-6. A successful forwarding attempt subject to PHS-2 and HSK-5 MUST immediately make the affected key healthy. Set `healthy = true`, `last_success_at = now`, `probe_success_count = 0`, `trip_rate_limited = false`, and set `last_probe_at`, `trip_id`, `trip_time`, `trip_retry_after_seconds`, `recovery_mode`, and `next_recovery_at` to null. A successful dashboard test uses the same reset for the key selected in CM-CH-TEST-1. A timed recovery does not record a successful attempt or probe.
+
+PHS-7. For each health write from a forwarding attempt, active probe, or dashboard test, `now` MUST be the wall-clock time when applying that update. It MUST NOT be a timestamp captured at dispatch or at the beginning of a scheduler tick. Use one write-time value per failed forwarding attempt, including its shared-origin samples under RTA-6c.
 
 ### 6.3 Active
 
-- `enabled` default `true`
-- `interval_seconds` default `30`
-- `method` default `completion`
-- `probe_model` default `null` (when null, use the first Channel model key)
-- `success_threshold` default `1`
+AHS-1. A health key is due exactly when its effective health is `unhealthy`, its `recovery_mode = probe`, and `now >= next_recovery_at`. Each tick MUST schedule one probe for each eligible due key, subject to AHS-1a, AHS-1b, AHS-3, AHS-9, AHS-11, and `request-logs.spec.md` RL3c and RL18e through RL18g. If the health map contains no unhealthy entry in `probe` mode, the tick MUST perform no database query.
 
-AHS-1. Active probing MUST target unhealthy channels whose cooldown has elapsed.
-
-AHS-1a. If `provider.circuit_breaker_enabled == false`, active probing MUST be skipped for that provider.
+AHS-1a. The scheduler MUST NOT probe any Channel whose `provider.circuit_breaker_enabled = false`. Every Provider with `circuit_breaker_enabled = true` is subject to AHS-1, AHS-1b, and AHS-9 with no separate enable switch.
 
 AHS-1b. Active-probe candidate loading MUST exclude a disabled Provider, a disabled Channel, and a Channel whose weight is zero. A Provider with no enabled positive-weight Channel MUST be excluded.
 
-AHS-2. Channel MUST return to healthy only after reaching success threshold.
+AHS-2. On an accepted successful probe (AHS-10), increment the key's consecutive success count by `1`. If it reaches the effective success threshold (CFG-3a), reset the key per PHS-6 without changing the passive failure queue. Otherwise the key MUST remain unhealthy; set `last_probe_at = now` and `next_recovery_at = now + interval`, with `interval` as in PHS-5. The previously recorded trip MUST NOT change on a below-threshold success.
 
-AHS-3. When `method` is `completion`, probe MUST send a minimal completion request using the resolved probe model. Resolution order is Channel probe model override, Provider probe model override, global probe model, then the first Channel model key in lexicographic order. The upstream request uses that Channel entry's redirect when non-empty. If no Channel model can be resolved, probing for that Provider/Channel MUST be skipped.
+AHS-3. For a Channel-level breaker, resolve the configured probe model per CFG-3a. Select it if it is a key of the Channel's `models`; otherwise select the lexicographically smallest Channel model key. An invalid higher-precedence value falls back to that smallest key, not a lower-precedence configured value. For a per-model breaker, select each due key's own logical model. Skip a probe if there is no selected model key in `models`. A dashboard Channel test without an explicit model MUST use the Channel-level selection rule even when `per_model_circuit_break = true`.
 
-AHS-4. The completion probe request MUST use `max_tokens: 16` and a minimal single-user-message payload to minimize cost and latency.
+AHS-3a. The scheduler and dashboard Channel test MUST resolve API type and Chat dialect from the selected logical model (AT-1 and AT-3a). The initial upstream model MUST be the selected entry's non-empty `redirect`, or the logical model when the redirect is empty or null. Neither a redirect nor a transform's change to the outbound model may change the selected API type, Chat dialect, or the logical model used for transform matching.
+
+AHS-3b. The scheduler and dashboard Channel test MUST use Provider `request_timeout_ms_override` when non-null, else the global `request_timeout_ms` (CFG-6). This is one total timeout in milliseconds for the entire probe request.
+
+AHS-4. For a probe whose effective API type is `responses`, `chat_completion`, `messages`, or `gemini`, the scheduler and dashboard Channel test MUST build one `UrpRequestV2` with a single user text message `hi`, maximum output tokens `16`, and the initial stream flag from CFG-3a or CM-CH-TEST-1. No downstream request, Monoize authentication context, or API-key transform chain participates. They MUST process the probe in this order:
+
+1. Apply the forwarding attempt shaping that does not require a downstream request (`urp-transform-system.spec.md` PIPE-1 steps 4–7). Set the request model per AHS-3a. Use the same cross-family nested-extra strip setting and precedence as forwarding. Do not synthesize downstream passthrough fields or client authentication context.
+2. Apply the Provider request-phase transforms, then the global request-phase transforms, in rule order within each scope. Match rules against the selected logical model and supply the selected effective API type as transform context (PIPE-1c, TF-3, TF-4, TF-10, TF-11). Transforms MAY change the URP request, including its maximum output tokens and stream flag, as for forwarding. Do not restore the initial token limit or stream flag after transforms.
+3. Encode the transformed URP request with the forwarding encoder for the effective API type and Chat dialect. Apply the forwarding extra-fields whitelist after transforms and before protocol-specific encoding (`unified_responses_proxy.spec.md` XF6e). Use the resulting upstream request mode for dispatch and decoding.
+4. Use the forwarding HTTP request construction for the encoded request, including endpoint and URL joining, upstream authentication, Channel extra headers, OpenCode probe session headers, and Channel proxy (CM-HDR-1, CM-AFF-3, PX6). Always use HTTP, never WebSocket (`unified_responses_proxy.spec.md` WS2f).
+
+Do not apply response-phase transforms. Do not keep separately constructed completion request bodies or a separate raw SSE reader for these API types.
+
+AHS-4a. For the completion-family probes in AHS-4, report success under exactly the applicable condition below, subject to the one total timeout in AHS-3b:
+
+- Streaming: the HTTP status is 2xx and the same URP stream decoder used by forwarding (`unified_responses_proxy.spec.md` FP5 through FP5c) reaches its terminal response event without emitting an error event. An HTTP 2xx status without a successful terminal decode is not sufficient.
+- Non-streaming: the HTTP status is 2xx and the same URP response decoder used by forwarding accepts the body.
+
+A request-phase transform or encoding error MUST send no upstream bytes and MUST be logged at `warn` level with the error. It counts as a failed probe with `rl' = false` and no Retry-After, so a scheduler result accepted under AHS-10 uses the `interval` branch of AHS-8. Classify upstream failures under AHS-8 and RTA-5d.
+
+AHS-4b. When the effective API type is `openai_image`, `openrouter_image`, `system_one`, or `openai_decisions`, use the native minimal non-streaming request instead of AHS-4 and AHS-4a. Do not apply transforms or consult the effective stream setting for these types. The native request shapes are specified by OIU-RT3, ORI-11, DR-C2, and CM-CH-TEST-1. Replicate Channels stay in timed recovery (AHS-9).
 
 AHS-5. Probe results MUST be logged at debug level with channel ID, provider name, probe model, and success/failure status.
 
-AHS-6. Probe scheduler MUST enforce provider-level probe interval independently. A channel that is probe-eligible MUST be skipped until `now - last_probe_at >= effective_interval_seconds`.
+AHS-6. *(Removed — `next_recovery_at` is the only probe due-time gate. See AHS-1.)*
 
-AHS-7. When `per_model_circuit_break == true`, the active-probe scheduler MUST select one probe-due unhealthy logical model and send the probe with that model's Channel mapping. A successful probe MUST increment and, after the success threshold, clear only that model's health entry. A failed probe MUST update only that model's health entry. The scheduler MUST NOT clear or extend cooldown for sibling model entries.
+AHS-7. Each due health key for a Channel with `per_model_circuit_break = true` MUST be evaluated separately. Each result MUST affect only the health key that the probe targeted. It MUST NOT modify the base Channel key or any sibling model key.
 
-AHS-8. Active probe failure cooldown MUST use the effective `passive_cooldown_seconds` for the channel (channel override first, global fallback), consistent with passive breaker resolution.
+AHS-8. On an accepted failed probe (AHS-10), the key MUST remain unhealthy. Set `probe_success_count = 0` and `last_probe_at = now`. If `honor` is true (CFG-4a) and the probe response is RateLimited (HTTP `429` or an RTA-5b rate-limit signal in its body, including a decoded upstream error event), set `next_recovery_at = now + max(passive_rate_limit_cooldown_seconds, ra')`, where `ra'` is the RTA-5d result of that probe, or `0` when absent. In every other case set `next_recovery_at = now + interval` (PHS-5). Use neither the original trip's Retry-After nor the timed recovery wait for a probe failure. The recorded trip MUST NOT change.
 
-AHS-9. Replicate channels MUST be skipped by active probing.
+AHS-9. The scheduler MUST run only on a primary (PRP11). It MUST skip every Channel whose `provider_type = replicate` (PHS-4).
+
+AHS-10. Each dispatch MUST capture the health key, its `trip_id`, and the routing configuration revision. On completion, apply the result only if the current revision matches the captured revision and the same key still exists, is effectively unhealthy, and has the captured `trip_id`. Do not use `trip_time` as the identity: two trips in the same second MUST have different ids. The scheduler MUST test this guard and apply the health write as one operation relative to other updates. A discarded result MUST NOT update, create, or recreate a health entry.
+
+AHS-11. A tick MUST have at most `8` probes in flight. No two probes may be in flight for the same health key. A tick MUST wait for all of its probes to finish before the next tick starts. Shutdown dispatch and drain rules remain RL3c and RL18e through RL18g in `request-logs.spec.md`.
+
+AHS-12. A tick's pricing snapshot MUST cover every logical model probed in that tick and include existing candidate price rows for the redirected and logical model keys used by `request-logs.spec.md` RL18a. For a completion-family probe, take usage for RL18 from the decoded URP response or the stream decoder's terminal usage, not from a separate interpretation of the native body or event frames. Logging and settlement MUST follow RL18 through RL18g, including when AHS-10 discards a health update.
 
 ## 7. Dashboard Requirements
 
@@ -441,16 +499,16 @@ UI-3. Provider editor MUST include:
 - provider enable toggle
 - Channel master list (name, type, base URL, weight, enabled, model count)
 - selected Channel model redirect and multiplier editor
-- channel runtime indicator (healthy/probing/unhealthy)
+- Channel runtime indicator (`healthy`, `unhealthy`, or `disabled`); show the separate `no_traffic` badge per PL18b of `dashboard-ui-layout.spec.md`
 - max_retries setting
 - channel_max_retries setting
 - channel_retry_interval_ms setting
 - circuit_breaker_enabled toggle
 - per_model_circuit_break toggle
 
-UI-4. Override fields (provider-level probe overrides, channel-level breaker overrides, timeout override) MUST display the effective global default value as placeholder text when the override is not set. Leaving a field empty MUST mean "inherit from global settings".
+UI-4. An unset probe, breaker, or timeout override field MUST display the value inherited under CFG-3a, CFG-4a, CFG-5, or CFG-6, as applicable. An empty field means inherit.
 
-UI-5. Nullable boolean overrides MUST use a three-value selector (inherit / enabled / disabled). When "inherit" is selected, the selector label MUST include the effective global boolean value (e.g. "Inherit Global (Enabled)").
+UI-5. Nullable boolean overrides MUST use a three-value selector (inherit / on / off). The inherit label MUST identify the source and inherited value, such as "Inherit Global (On)" or "Inherit Provider (Off)".
 
 UI-6. Provider model fetching MUST NOT exist as a provider-level action. Each channel editor MUST expose model fetching using the channel's type, base URL, and API key.
 

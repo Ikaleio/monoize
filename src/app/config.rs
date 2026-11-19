@@ -67,7 +67,7 @@ pub(crate) fn runtime_config_from_settings(
         passive_rate_limit_cooldown_seconds: settings_snapshot
             .monoize_passive_rate_limit_cooldown_seconds
             .max(1),
-        active_enabled: settings_snapshot.monoize_active_probe_enabled,
+        honor_rate_limit: settings_snapshot.monoize_honor_rate_limit,
         active_interval_seconds: settings_snapshot
             .monoize_active_probe_interval_seconds
             .max(1),
@@ -75,6 +75,7 @@ pub(crate) fn runtime_config_from_settings(
             .monoize_active_probe_success_threshold
             .max(1),
         active_probe_model: settings_snapshot.monoize_active_probe_model.clone(),
+        active_probe_stream: settings_snapshot.monoize_active_probe_stream,
         global_transforms: settings_snapshot.global_transforms.clone(),
         reasoning_suffix_map: settings_snapshot.reasoning_suffix_map.clone(),
         allow_free_when_unpriced: settings_snapshot.allow_free_when_unpriced,

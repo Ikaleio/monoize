@@ -1,7 +1,8 @@
 use crate::urp::grouping::{Envelope, envelopes};
+use crate::urp::media::{MediaError, validate_image_markup};
 use crate::urp::{
-    AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ToolResultContent, UrpRequest,
-    is_internal_key,
+    AudioSource, FileSource, ImageSource, Node, OrdinaryRole, ProviderProtocol, ToolResultContent,
+    UrpRequest, is_internal_key,
 };
 use serde_json::{Map, Value};
 
@@ -110,7 +111,8 @@ fn encode_conversation(conversation: &[Node]) -> Map<String, Value> {
     input
 }
 
-pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
+pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Result<Value, MediaError> {
+    validate_image_markup(&req.input, ProviderProtocol::Replicate)?;
     let mut input = encode_conversation(&req.input);
     if let Some(max_tokens) = req.max_output_tokens {
         input.insert("max_tokens".to_string(), Value::from(max_tokens));
@@ -185,7 +187,7 @@ pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     body.remove("model");
     body.remove("max_multiplier");
 
-    Value::Object(body)
+    Ok(Value::Object(body))
 }
 
 fn image_source_to_value(source: &ImageSource) -> Option<Value> {

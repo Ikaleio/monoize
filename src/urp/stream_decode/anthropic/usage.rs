@@ -237,6 +237,7 @@ impl AnthropicStreamUsageAccumulator {
 
         Some(Usage {
             iterations: self.iterations.clone(),
+            reported_token_counts: self.input_tokens.is_some() && self.output_tokens.is_some(),
             // Internal input tokens include the cache buckets that wire `input_tokens` excludes.
             input_tokens: self
                 .input_tokens

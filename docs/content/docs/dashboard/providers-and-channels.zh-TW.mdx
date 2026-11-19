@@ -127,9 +127,9 @@ OpenCode Go 用 `x-opencode-session` 將工作階段綁定到提示快取。缺�
 
 展開 Provider 後，Channel 列的開關會立即啟用或停用該 Channel，無需開啟編輯器。
 
-測試會送出一次短串流補全，輸出上限為 16 個 token。僅 HTTP 2xx 不夠。串流必須到達協定終結事件。
+對補全類測試，**快速測試**採用 Channel 實際生效的串流設定。測試對話框也以該設定作為初始值。對於支援串流測試的模型，可以透過**串流回應**變更初始模式。圖片與決策類測試一律使用非串流請求。
 
-對 Responses Channel，`response.completed` 算通過。沒有 error 物件的 `response.incomplete` 也算通過。推理模型可能打滿 16 token 上限並回傳 `incomplete`。該結果仍表示 Channel 可達。
+測試與[主動探測](/zh-TW/docs/routing)採用相同的請求處理流程和成功判定規則。補全類測試的請求變換可以修改串流模式或初始的 16 token 輸出上限。串流測試僅收到 HTTP `2xx` 並不算成功；解碼器必須讀到終止事件，且沒有送出錯誤事件。非串流補全測試要求解碼器成功讀取回應本文。
 
 ## 對應模型
 

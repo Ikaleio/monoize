@@ -99,14 +99,14 @@ The `stream` parameter is unused; the path is the same regardless.
 
 Standard waterfall routing applies (§ database-provider-routing.spec.md):
 - Provider eligibility: enabled, model exists, multiplier ceiling, group eligibility.
-- Channel eligibility: enabled, weight > 0, healthy.
+- Channel eligibility: enabled, weight > 0, and not effectively unhealthy when the Provider circuit breaker is enabled (R-CH-1).
 - Weighted channel shuffle.
 - Retry on 429 / 5xx / network error; stop on 400 / 401 / 403 / 422.
 - Passive health classification follows `monoize-upstream-routing.spec.md` RTA-5a through RTA-6. In particular, an upstream 401 or 403 does not retry the same Channel but does trip its breaker immediately.
 
-## 7. Active Probing
+## 7. Timed Recovery
 
-Replicate Channels are **excluded** from the active health probe loop. Active probing skips Channels where `provider_type == Replicate`. Health assessment relies on passive failure tracking only.
+REP-H-1. On both primary and replica nodes, a Channel whose `provider_type = replicate` MUST use `timed` recovery for every breaker trip. The scheduler MUST NOT dispatch probes for it. Use the PHS-5 timed wait in `monoize-upstream-routing.spec.md`; routing and status reads MUST treat the key as healthy at and after `next_recovery_at` without a background task.
 
 ## 8. Transform Support
 

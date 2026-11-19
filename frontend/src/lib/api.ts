@@ -317,10 +317,10 @@ export interface SystemSettings {
   codex_model_ids: string[];
   dashboard_performance_group_ids: string[];
   dashboard_performance_model_ids: string[];
-  monoize_active_probe_enabled: boolean;
   monoize_active_probe_interval_seconds: number;
   monoize_active_probe_success_threshold: number;
   monoize_active_probe_model?: string | null;
+  monoize_active_probe_stream: boolean;
   monoize_affinity_enabled: boolean;
   monoize_affinity_idle_ttl_seconds: number;
   monoize_affinity_failback_mode: AffinityFailbackMode;
@@ -328,6 +328,7 @@ export interface SystemSettings {
   monoize_passive_failure_threshold: number;
   monoize_passive_cooldown_seconds: number;
   monoize_passive_window_seconds: number;
+  monoize_honor_rate_limit: boolean;
   monoize_passive_rate_limit_cooldown_seconds: number;
   monoize_request_timeout_ms: number;
   monoize_stream_idle_timeout_ms: number;
@@ -645,11 +646,12 @@ export interface MonoizeChannel {
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
   passive_rate_limit_cooldown_seconds_override?: number | null;
+  honor_rate_limit_override?: boolean | null;
   models: Record<string, MonoizeModelEntry>;
-  active_probe_enabled_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  active_probe_stream_override?: boolean | null;
   affinity_enabled_override?: boolean | null;
   affinity_idle_ttl_seconds_override?: number | null;
   affinity_failback_mode_override?: AffinityFailbackMode | null;
@@ -660,17 +662,16 @@ export interface MonoizeChannel {
   websocket_supported?: boolean | null;
   chat_dialect?: ChatDialect | null;
   _healthy?: boolean;
-  _last_success_at?: string;
-  _health_status?: "healthy" | "probing" | "unhealthy";
+  _last_success_at?: string | null;
+  _health_status?: "healthy" | "unhealthy";
   _unhealthy_models?: string[];
-  _probing_models?: string[];
-  _cooldown_until?: string;
+  _next_recovery_at?: string | null;
 }
 
 export interface ProviderModelRuntimeChannel {
   channel_id: string;
   channel_name: string;
-  cooldown_until?: string;
+  next_recovery_at?: string;
 }
 
 export interface ProviderModelRuntimeStatus {
@@ -712,10 +713,11 @@ export interface Provider {
   per_model_circuit_break: boolean;
   transforms: TransformRuleConfig[];
   api_type_overrides: ApiTypeOverride[];
-  active_probe_enabled_override?: boolean | null;
+  honor_rate_limit_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  active_probe_stream_override?: boolean | null;
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
@@ -748,11 +750,12 @@ export interface CreateMonoizeChannelInput {
   passive_cooldown_seconds_override?: number | null;
   passive_window_seconds_override?: number | null;
   passive_rate_limit_cooldown_seconds_override?: number | null;
+  honor_rate_limit_override?: boolean | null;
   models: Record<string, MonoizeModelEntry>;
-  active_probe_enabled_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  active_probe_stream_override?: boolean | null;
   affinity_enabled_override?: boolean | null;
   affinity_idle_ttl_seconds_override?: number | null;
   affinity_failback_mode_override?: AffinityFailbackMode | null;
@@ -774,10 +777,11 @@ export interface CreateProviderInput {
   per_model_circuit_break?: boolean;
   transforms?: TransformRuleConfig[];
   api_type_overrides?: ApiTypeOverride[];
-  active_probe_enabled_override?: boolean | null;
+  honor_rate_limit_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  active_probe_stream_override?: boolean | null;
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
@@ -798,10 +802,11 @@ export interface UpdateProviderInput {
   per_model_circuit_break?: boolean;
   transforms?: TransformRuleConfig[];
   api_type_overrides?: ApiTypeOverride[];
-  active_probe_enabled_override?: boolean | null;
+  honor_rate_limit_override?: boolean | null;
   active_probe_interval_seconds_override?: number | null;
   active_probe_success_threshold_override?: number | null;
   active_probe_model_override?: string | null;
+  active_probe_stream_override?: boolean | null;
   request_timeout_ms_override?: number | null;
   extra_fields_whitelist?: string[] | null;
   strip_cross_protocol_nested_extra?: boolean | null;
@@ -1073,10 +1078,9 @@ export interface AdminOverviewChannelHealth {
   session_affinity_auto: boolean;
   healthy: boolean;
   last_success_at?: number | null;
-  cooldown_until?: number | null;
+  next_recovery_at: number | null;
   probe_success_count: number;
   last_probe_at?: number | null;
-  cooldown_active: boolean;
   unhealthy_models: string[];
   window_calls: number;
   window_cost_nano_usd: string;
@@ -1822,12 +1826,12 @@ class ApiClient {
     providerId: string,
     channelId: string,
     model?: string,
-    stream = true,
+    stream?: boolean,
     signal?: AbortSignal,
   ): Promise<ChannelTestResult> {
     return this.request(`/providers/${providerId}/channels/${channelId}/test`, {
       method: "POST",
-      body: JSON.stringify({ ...(model ? { model } : {}), stream }),
+      body: JSON.stringify({ model, stream }),
       signal,
     });
   }

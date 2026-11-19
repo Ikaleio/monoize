@@ -17,11 +17,12 @@ pub struct Model {
     pub transforms: String,
     #[sea_orm(column_type = "Text")]
     pub api_type_overrides: String,
-    pub active_probe_enabled_override: Option<i32>,
+    pub honor_rate_limit_override: Option<i32>,
     pub active_probe_interval_seconds_override: Option<i32>,
     pub active_probe_success_threshold_override: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub active_probe_model_override: Option<String>,
+    pub active_probe_stream_override: Option<i32>,
     pub request_timeout_ms_override: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub extra_fields_whitelist: Option<String>,

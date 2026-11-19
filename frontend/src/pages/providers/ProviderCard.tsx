@@ -69,6 +69,7 @@ type ProviderCardProps = {
 	onDragEnd: () => void
 	modelMetadata: ModelMetadataRecord[]
 	globalProbeModel?: string | null
+	globalProbeStream?: boolean
 	/** PL12e: a new object expands the card, scrolls to it and highlights `channelId`. */
 	focusRequest: { channelId: string | null } | null
 }
@@ -90,6 +91,7 @@ export function ProviderCard({
 	onDragEnd,
 	modelMetadata,
 	globalProbeModel,
+	globalProbeStream,
 	focusRequest
 }: ProviderCardProps) {
 	const { t, i18n } = useTranslation()
@@ -212,7 +214,7 @@ export function ProviderCard({
 	const handleQuickTest = async (channel: MonoizeChannel, model: string) => {
 		setQuickTestingChannelId(channel.id)
 		try {
-			const result = await api.testChannel(provider.id, channel.id, undefined, false)
+			const result = await api.testChannel(provider.id, channel.id)
 			if (result.success) {
 				toast.success(t('providers.quickTestPassed', { channel: channel.name, ms: result.latency_ms }), { description: result.model ?? model })
 			} else {
@@ -537,6 +539,8 @@ export function ProviderCard({
 																				channelId: channel.id,
 																				channelName: channel.name,
 																				providerType: channel.provider_type,
+																				apiTypeOverrides: provider.api_type_overrides,
+																				initialStream: channel.active_probe_stream_override ?? provider.active_probe_stream_override ?? globalProbeStream ?? true,
 																				models
 																			})}
 																		>

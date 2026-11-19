@@ -5,12 +5,10 @@ use crate::custom_transforms::CustomTransformStore;
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 use crate::exact_decimal::Multiplier;
-use crate::handlers::routing::health_key;
 use crate::image_transform_cache::ImageTransformCache;
 use crate::model_registry_store::ModelRegistryStore;
 use crate::monoize_routing::{
     ChannelAffinityBinding, ChannelHealthState, MonoizeRoutingStore, MonoizeRuntimeConfig,
-    probe_channel_completion,
 };
 use crate::node_config::{HttpClients, NodeRole, NodeSettings};
 use crate::request_capture::RequestCaptureStore;

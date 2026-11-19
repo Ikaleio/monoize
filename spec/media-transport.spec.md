@@ -34,13 +34,42 @@ MT13. Messages MUST encode PDF bytes as a base64 PDF source. UTF-8 text-like byt
 MT14. Unsupported Messages binary files, unsupported image MIME types, and unsupported audio inputs MUST produce explicit errors.
 MT14a. A Messages URL document MUST have PDF evidence from typed MIME, the source document contract, or its URL extension. Other file URLs MUST fail.
 MT14b. Image preparation MUST validate MIME syntax and use its type and subtype. Parameters MUST NOT enter a target's fixed image MIME field.
-MT15. When encoding a Chat request, file URLs and unsupported media roles MUST produce explicit errors. Chat tool-result media MUST fail at target encoding.
+MT15. When encoding a Chat request, the effective Chat dialect MUST determine the available file URL and tool-result carriers. `openrouter` MUST encode compatible image and file parts in tool results using the user-message part encoders (PC2.5, PC2.10 in `unified_responses_proxy.spec.md`). Both positions MUST accept public HTTP(S) file URLs in `file.file_data` on `openrouter`. All other Chat dialects MUST reject file URLs and tool-result images and non-text files under MT20a. Ordinary Chat image, file, and audio roles remain restricted by MT20a.
 MT15a. Chat tool and function result decoders MUST accept compatible text, image, and file content. They MUST preserve content order and typed metadata.
 MT16. Responses assistant history MAY use stable easy-input messages with input media. Output-message content MUST contain only supported output types.
 MT17. Gemini FunctionResponsePart MUST use the GenerateContent schema. URL media requiring unsupported nested fileData MUST produce an explicit error.
 MT18. Public HTTP(S) resources MAY use a supported URL carrier. Provider-private file URIs and GCS references MUST retain their source restrictions.
 MT19. An unsupported source MUST NOT become an empty input or disappear from a mixed message.
 MT20. Invalid or unsupported media MUST produce a descriptive request error before the upstream request is sent.
+
+MT20a. The following request media rejections MUST be classified as target-capability failures for the selected upstream attempt (RTA-5e in `monoize-upstream-routing.spec.md`). Use the effective API type and Chat dialect of that attempt. Preserve the rejecting check's message and the target encoder's existing HTTP `400` code: `invalid_request` for Messages and OpenAI Image, `unsupported_media` for Responses, Chat, and Gemini.
+
+| Check | Condition |
+| --- | --- |
+| Chat tool-result image or file | The effective Chat dialect is `openai`, `deepseek`, `vercel`, or `generic`, and the prepared tool result contains an Image or a File that did not expand to text under MT11. |
+| Chat ordinary image or file role | An Image or an unexpanded File appears in an ordinary role other than `user`. A tool result is handled separately by PC2.10. |
+| Chat audio role | An Audio node has a non-user role and is not an assistant native audio reference with its reference ID and Chat audio envelope. |
+| Chat audio URL | An Audio source is a URL rather than inline bytes. |
+| Chat audio format | The inline audio has a known audio MIME, but its MIME essence is not `audio/wav`, `audio/x-wav`, `video/audio/wav`, `audio/mpeg`, or `audio/mp3`. |
+| Chat file URL | A File source is a URL and the effective Chat dialect is not `openrouter`. |
+| Messages system content | An Image or File has the `system` or `developer` role, including a File that could otherwise be expanded from a text or compound document. |
+| Messages and Responses audio carrier | An Audio node is present in request input for `messages` or `responses`. |
+| Messages inline document MIME | A File has known inline MIME other than `application/pdf` or a supported UTF-8 text-like MIME under MT13. |
+| Messages URL document MIME | A File URL does not have the required PDF evidence under MT14a. |
+| Gemini system instruction | Prepared Gemini input places an Image, Audio, File, or ProviderItem in a `system` or `developer` instruction. |
+| Gemini function-result media URL | A nested Image or File in a Gemini function result is a URL and requires an unavailable nested URL carrier under MT17. |
+| Gemini file ID carrier | A compatible-provenance File in Gemini input has a `FileId` source, which Gemini cannot encode as that file-ID carrier. |
+| Image file ID carrier | A compatible-provenance Image in Chat or Gemini input has a `FileId` source, which those targets cannot encode as an image-ID carrier. |
+| Inline image MIME | A syntactically valid MIME essence is outside the target's fixed inline image set. For Chat, Responses, and Messages the set is `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. For Gemini it is `image/png`, `image/jpeg`, `image/jpg`, `image/webp`, `image/heic`, `image/heif`, `image/gif`, and `image/avif`. |
+| Image URL MIME | An Image URL has an explicit syntactically valid MIME essence outside the Chat, Responses, or Messages image set above. |
+| Other inline file MIME | A non-Gemini target rejects a known audio or video MIME in a File, or Gemini rejects a known inline File MIME outside PDF, RTF, text-like, audio, video, and image MIME families. |
+| Gemini media MIME | Gemini's media validator rejects a known inline MIME or explicitly declared URL MIME on an Image, File, or Audio node or on an Image or File part of a tool result. Apply the Gemini codec's fixed supported types and the YouTube URL exception in MT34a. |
+| Media URL scheme | A syntactically valid non-data media URL passes provenance checks, but its scheme has no target carrier. The shared URL check allows `http` and `https`; `gs` is available only for Gemini with valid provenance. |
+| Image markup | Request input has an Image with `metadata.image_markup = true`, and the target is not `openai_image` (MT9e). |
+
+The Chat tool-result image and file checks MUST keep the messages `Chat tool results support text only; image content cannot be discarded.` and `Chat tool results support text only; file content cannot be discarded.`, respectively. The Messages system-content image and file checks MUST keep `Messages system content supports text only; images cannot be discarded.` and `Messages system content supports text only; documents cannot be discarded.`, respectively. The Gemini system-instruction check MUST keep `Gemini system instructions support text only; media cannot be discarded`.
+
+MT20b. Target-capability classification MUST NOT include malformed input or document blocks, invalid Base64, invalid required UTF-8, invalid URL or image MIME syntax, an unknown required MIME or unknown audio format, or missing or incompatible resource provenance or credential scope (MT21 through MT25c). Gemini custom-tool, argument, stop, and logprobs validation and Messages tool-input and thinking-control validation are not media target-capability rejections. Other request-encoding errors retain the stop-routing behavior in RTA-5. Downstream response-encoding errors remain governed by MT26 through MT31a.
 
 ## Resource routing
 
@@ -108,3 +137,5 @@ The following official sources were checked on 2026-09-12:
 - [Gemini GenerateContent](https://ai.google.dev/api/generate-content)
 - [GenerateContent audio](https://ai.google.dev/gemini-api/docs/generate-content/audio)
 - [GenerateContent video](https://ai.google.dev/gemini-api/docs/generate-content/video-understanding)
+
+OpenRouter Chat tool-result and file URL shapes follow the [OpenRouter OpenAPI](https://openrouter.ai/openapi.json) definitions of `ChatToolMessage`, `ChatContentImage`, and `ChatContentFile`.

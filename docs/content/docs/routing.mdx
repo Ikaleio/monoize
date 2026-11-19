@@ -38,7 +38,8 @@ Monoize tries routes in nested order: Channels inside a Provider first, then the
 | HTTP `408`, `429`, `5xx` | Yes | Yes, after Channel budget |
 | Timeout, connection refused or reset | Yes | Yes, after Channel budget |
 | Other upstream errors (for example `400`, `401`, `404`) | No | Yes, at once |
-| Monoize-side errors (auth, balance, validation, billing) | No | No; routing stops |
+| Target-capability failure (the upstream protocol cannot represent the request's media) | No | Yes, at once |
+| Other Monoize errors (for example, authentication, balance, request validation, request encoding, or billing) | No | No; routing stops |
 
 ## Streaming guarantee
 
@@ -50,14 +51,54 @@ If all routes fail after the headers, the error arrives in the stream, because t
 
 ## Circuit breaker
 
-Each Provider has `circuit_breaker_enabled`. When enabled:
+Each Provider has `circuit_breaker_enabled`. Set it to `false` to ignore the Provider's health state. Monoize then stops tracking health and sending automatic probes for that Provider. There is no separate probe switch.
 
-- A Channel becomes unhealthy after `failure_count_threshold` retryable failures (default `3`) within `window_seconds` (default `30`).
-- An unhealthy Channel is skipped for `cooldown_seconds` (default `60`). Failures caused by HTTP `429` use `rate_limit_cooldown_seconds` (default `15`).
-- With `per_model_circuit_break` on, health is tracked per `(Channel, model)` pair instead of per Channel.
-- With active probing on, Monoize probes cooled-down Channels in the background and restores them after the success threshold.
+The dashboard shows three Channel health states:
 
-Set `circuit_breaker_enabled` to `false` on a Provider to ignore health state for it. Passive breaking and active probing then stop for that Provider.
+- **Healthy.** The Channel can receive traffic if it meets the other routing requirements.
+- **Unhealthy.** Monoize sends no forwarded requests to the Channel until it recovers.
+- **Disabled.** `enabled` is `false`. The Channel cannot receive traffic, regardless of the circuit breaker setting.
+
+With the circuit breaker on, a persistent failure makes the Channel unhealthy immediately. Transient and rate-limit failures count toward a threshold of three failures in 30 seconds by default. If `per_model_circuit_break` is on, Monoize tracks health separately for each model in the Channel. An unhealthy model does not block traffic for other models in that Channel.
+
+### Probe recovery on the primary
+
+The primary uses automatic probes to recover non-Replicate Channels. Monoize waits one probe interval before the first probe unless the rate-limit rule below applies. A failed probe resets the consecutive success count. Monoize waits another interval before the next probe unless the same rule applies.
+
+Reaching the consecutive success threshold makes the Channel or model healthy. Below the threshold, a successful probe schedules the next probe after one interval. The end of an interval only makes a probe due. It does not allow forwarded traffic. Monoize does not probe disabled Providers, disabled Channels, or Channels with zero weight.
+
+| Probe setting | Global key | Provider or Channel override | Default |
+| --- | --- | --- | --- |
+| Interval | `monoize_active_probe_interval_seconds` | `active_probe_interval_seconds_override` | 30 seconds |
+| Success threshold | `monoize_active_probe_success_threshold` | `active_probe_success_threshold_override` | 1 success |
+| Probe model | `monoize_active_probe_model` | `active_probe_model_override` | `null` |
+| Streaming | `monoize_active_probe_stream` | `active_probe_stream_override` | On (`true`) |
+
+For each setting, Monoize uses the first non-null value in this order: Channel override, Provider override, global setting. A streaming override of `false` turns streaming off instead of inheriting the next value.
+
+With a Channel-level breaker, Monoize uses the configured probe model if the Channel serves it. If the model is unset or absent from the Channel, Monoize selects the first logical model key in lexicographic order. With `per_model_circuit_break` on, Monoize probes each unhealthy model with its own logical model key.
+
+Probes for Responses, Chat Completions, Messages, and Gemini start with one `hi` message and a 16-token output limit. They request streaming by default. Monoize applies the Provider request transforms first, then the global request transforms. These transforms can change the token limit or the stream flag. Monoize uses the same encoder as forwarding and always sends probes over HTTP. A transform or encoding error fails the probe without sending a request upstream.
+
+A probe needs an HTTP `2xx` response to succeed. In streaming mode, the forwarding decoder must reach a terminal event without an error event. In non-streaming mode, the forwarding decoder must accept the response body. Image and decision Channels use native non-streaming probes without transforms. The stream setting does not apply to them.
+
+### Timed recovery
+
+Replicate Channels on any node and all Channels on replica nodes use timed recovery instead of automatic probes. The normal wait (`cooldown_seconds`) defaults to 60 seconds. Set it with `monoize_passive_cooldown_seconds` globally or `passive_cooldown_seconds_override` on a Channel. When the wait ends, the Channel or model becomes healthy without a probe.
+
+### Honor rate limit
+
+`monoize_honor_rate_limit` defaults to `false`. Set `honor_rate_limit_override` on a Provider or Channel to override it. Monoize uses the first non-null value in this order: Channel, Provider, global. Set an override to `false` to turn the setting off rather than inherit it.
+
+When enabled, a trip caused by HTTP `429` or another recognized rate-limit error uses the rate-limit cooldown instead of the normal wait. This applies before the first probe or timed recovery. The rate-limit cooldown defaults to 15 seconds. Set it with `monoize_passive_rate_limit_cooldown_seconds` globally or `passive_rate_limit_cooldown_seconds_override` on a Channel.
+
+If the upstream sends a longer valid `Retry-After`, Monoize uses that value. Monoize caps the parsed header value at 3600 seconds before comparing it with the cooldown. A valid `retry-after-ms` takes precedence over `Retry-After` and rounds up to whole seconds. A rate-limited probe also uses this rule, based on its own response. When the setting is off, rate-limit errors use the normal probe interval or timed recovery wait.
+
+### Dashboard test and enable toggle
+
+Run the [Channel test](/en/docs/dashboard/providers-and-channels) to check recovery without waiting for an automatic probe. The test uses the same request pipeline and success rules as the automatic probe. For completion tests, **Quick Test** uses the Channel's effective stream setting. In the test dialog, choose the initial stream mode yourself. A successful test makes the Channel healthy immediately. With `per_model_circuit_break` on, it makes only the tested model healthy. The test does not support Replicate completion requests.
+
+Enabling or disabling a Channel clears its recorded health state, including all per-model health states.
 
 ## Session affinity
 

@@ -124,11 +124,11 @@ pub(super) fn decode_channel_row(
             "passive_rate_limit_cooldown_seconds_override",
         )?,
         models,
-        active_probe_enabled_override: decode_optional_bool(
+        honor_rate_limit_override: decode_optional_bool(
             row,
             "channel",
             &id,
-            "active_probe_enabled_override",
+            "honor_rate_limit_override",
         )?,
         active_probe_interval_seconds_override: decode_optional_positive_u64(
             row,
@@ -145,6 +145,12 @@ pub(super) fn decode_channel_row(
         active_probe_model_override: row
             .try_get("", "active_probe_model_override")
             .map_err(|e| e.to_string())?,
+        active_probe_stream_override: decode_optional_bool(
+            row,
+            "channel",
+            &id,
+            "active_probe_stream_override",
+        )?,
         affinity_enabled_override: decode_optional_bool(
             row,
             "channel",
@@ -187,8 +193,7 @@ pub(super) fn decode_channel_row(
         _last_success_at: None,
         _health_status: None,
         _unhealthy_models: None,
-        _probing_models: None,
-        _cooldown_until: None,
+        _next_recovery_at: None,
     })
 }
 
@@ -235,11 +240,11 @@ pub(super) fn decode_provider_row(
         )?,
         transforms,
         api_type_overrides,
-        active_probe_enabled_override: decode_optional_bool(
+        honor_rate_limit_override: decode_optional_bool(
             row,
             "provider",
             &id,
-            "active_probe_enabled_override",
+            "honor_rate_limit_override",
         )?,
         active_probe_interval_seconds_override: decode_optional_positive_u64(
             row,
@@ -256,6 +261,12 @@ pub(super) fn decode_provider_row(
         active_probe_model_override: row
             .try_get("", "active_probe_model_override")
             .map_err(|e| e.to_string())?,
+        active_probe_stream_override: decode_optional_bool(
+            row,
+            "provider",
+            &id,
+            "active_probe_stream_override",
+        )?,
         request_timeout_ms_override: decode_optional_positive_u64(
             row,
             "provider",

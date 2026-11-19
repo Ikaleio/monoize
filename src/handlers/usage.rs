@@ -1,3 +1,4 @@
+use super::routing::{RetryableFailureClass, classify_channel_health_failure};
 use super::{StreamRuntimeMetrics, StreamTerminalError};
 use crate::urp;
 use serde_json::{Map, Value};
@@ -331,10 +332,24 @@ pub(crate) async fn record_stream_terminal_error(
     event: &str,
     error: StreamTerminalError,
 ) {
+    record_stream_upstream_terminal_error(runtime_metrics, event, error, None, None).await;
+}
+
+pub(crate) async fn record_stream_upstream_terminal_error(
+    runtime_metrics: &Option<Arc<Mutex<StreamRuntimeMetrics>>>,
+    event: &str,
+    error: StreamTerminalError,
+    code: Option<&str>,
+    error_type: Option<&str>,
+) {
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
         return;
     };
     let mut guard = runtime_metrics.lock().await;
+    guard.upstream_terminal_rate_limited = matches!(
+        classify_channel_health_failure(None, code, error_type),
+        Some(RetryableFailureClass::RateLimited)
+    );
     guard.terminal.terminal_event = Some(event.to_string());
     guard.terminal.terminal_error = Some(error);
 }
@@ -466,6 +481,7 @@ pub(super) fn parse_usage_from_embeddings_object(obj: &Value) -> Option<urp::Usa
     extra_body.insert("total_tokens".to_string(), Value::from(total_tokens));
     Some(urp::Usage {
         iterations: None,
+        reported_token_counts: false,
         input_tokens,
         output_tokens: 0,
         input_details: None,

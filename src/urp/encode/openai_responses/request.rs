@@ -8,6 +8,7 @@ use super::media::validate_stable_responses_audio;
 use super::tools::encode_tools;
 use crate::urp::cache_breakpoint::{CacheWireTarget, materialize_wire_markers};
 use crate::urp::encode::{merge_extra, tool_choice_to_responses_value};
+use crate::urp::media::MediaError;
 use crate::urp::{
     InstructionsFormat, Node, ProviderProtocol, ReasoningConfig, ResponseFormat, UrpRequest,
     is_internal_key,
@@ -16,10 +17,10 @@ use serde_json::{Map, Value, json};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str) -> Value {
     encode_request_checked(req, upstream_model)
-        .unwrap_or_else(|error| crate::urp::media::error_body(&error))
+        .unwrap_or_else(|error| crate::urp::media::error_body(error.message()))
 }
 
-pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, String> {
+pub fn encode_request_checked(req: &UrpRequest, upstream_model: &str) -> Result<Value, MediaError> {
     let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::Responses)?;
     prepare_image_generation_request(&mut prepared)?;
     validate_stable_responses_audio(&prepared.input)?;

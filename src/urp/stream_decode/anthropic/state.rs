@@ -7,7 +7,8 @@ use crate::handlers::usage::{
     increment_estimated_output_tokens, mark_stream_ttfb_if_needed,
     record_cumulative_stream_usage_snapshot, record_observed_upstream_response_model,
     record_stream_done_sentinel, record_stream_response_service_tier, record_stream_terminal_error,
-    record_stream_terminal_event, record_visible_stream_event_delta,
+    record_stream_terminal_event, record_stream_upstream_terminal_error,
+    record_visible_stream_event_delta,
 };
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::encode::anthropic::messages_finish_reason;
@@ -206,7 +207,15 @@ impl<'a> AnthropicMessagesStreamState<'a> {
             extra_body,
         })
         .await;
-        record_stream_terminal_error(&self.runtime_metrics, "error", terminal_error).await;
+        let raw = data.get("error").unwrap_or(data);
+        record_stream_upstream_terminal_error(
+            &self.runtime_metrics,
+            "error",
+            terminal_error,
+            raw.get("code").and_then(Value::as_str),
+            raw.get("type").and_then(Value::as_str),
+        )
+        .await;
         Flow::Stop
     }
 

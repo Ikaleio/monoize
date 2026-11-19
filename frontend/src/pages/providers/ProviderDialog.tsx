@@ -168,10 +168,11 @@ function buildInput(form: ProviderForm): CreateProviderInput {
 			passive_cooldown_seconds_override: channel.passive_cooldown_seconds_override,
 			passive_window_seconds_override: channel.passive_window_seconds_override,
 			passive_rate_limit_cooldown_seconds_override: channel.passive_rate_limit_cooldown_seconds_override,
-			active_probe_enabled_override: channel.active_probe_enabled_override,
+			honor_rate_limit_override: channel.honor_rate_limit_override,
 			active_probe_interval_seconds_override: channel.active_probe_interval_seconds_override,
 			active_probe_success_threshold_override: channel.active_probe_success_threshold_override,
 			active_probe_model_override: channel.active_probe_model_override.trim() || null,
+			active_probe_stream_override: channel.active_probe_stream_override,
 			affinity_enabled_override: channel.affinity_enabled_override,
 			affinity_idle_ttl_seconds_override: channel.affinity_idle_ttl_seconds_override,
 			affinity_failback_mode_override: channel.affinity_failback_mode_override,
@@ -184,10 +185,11 @@ function buildInput(form: ProviderForm): CreateProviderInput {
 		})),
 		transforms: form.transforms,
 		api_type_overrides: form.api_type_overrides,
-		active_probe_enabled_override: form.active_probe_enabled_override,
+		honor_rate_limit_override: form.honor_rate_limit_override,
 		active_probe_interval_seconds_override: form.active_probe_interval_seconds_override,
 		active_probe_success_threshold_override: form.active_probe_success_threshold_override,
 		active_probe_model_override: form.active_probe_model_override.trim() || null,
+		active_probe_stream_override: form.active_probe_stream_override,
 		request_timeout_ms_override: form.request_timeout_ms_override,
 		extra_fields_whitelist: form.extra_fields_whitelist,
 		strip_cross_protocol_nested_extra: form.strip_cross_protocol_nested_extra,
@@ -870,6 +872,8 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 										channelId: ch.id,
 										channelName: ch.name,
 										providerType: ch.provider_type,
+										apiTypeOverrides: form.api_type_overrides,
+										initialStream: ch.active_probe_stream_override ?? form.active_probe_stream_override ?? settings?.monoize_active_probe_stream ?? true,
 										models: ch.models.map(model => model.model).sort()
 									})}
 								>
@@ -1011,26 +1015,42 @@ function ChannelDetail({ form, activeChannel, selectedChannel, setMobileChannelO
 			icon={CircleGauge}
 			title={t('providers.editor.healthTitle')}
 			summary={overrideSummary([
-				[t('providers.editor.activeProbing'), ch.active_probe_enabled_override],
 				[t('providers.editor.probeModel'), ch.active_probe_model_override.trim()],
 				[t('providers.editor.probeInterval'), ch.active_probe_interval_seconds_override],
 				[t('providers.editor.probeSuccessThreshold'), ch.active_probe_success_threshold_override],
+				[t('settings.activeProbeStream'), ch.active_probe_stream_override],
 				[t('providers.editor.failureThreshold'), ch.passive_failure_count_threshold_override],
 				[t('providers.editor.windowSeconds'), ch.passive_window_seconds_override],
 				[t('providers.editor.cooldownSeconds'), ch.passive_cooldown_seconds_override],
+				[t('settings.honorRateLimit'), ch.honor_rate_limit_override],
 				[t('providers.editor.rateLimitCooldownSeconds'), ch.passive_rate_limit_cooldown_seconds_override]
 			], t)}
 		>
-			<NullableBoolean id='channel-probe-enabled' label={t('providers.editor.activeProbing')} value={ch.active_probe_enabled_override} onChange={value => update({ active_probe_enabled_override: value })} />
 			<Field id='channel-probe-model' label={t('providers.editor.probeModel')} hint={t('providers.editor.probeModelHint', { model: form.active_probe_model_override.trim() || settings?.monoize_active_probe_model || t('providers.editor.firstChannelModel') })}>
 				<Input id='channel-probe-model' value={ch.active_probe_model_override} onChange={event => update({ active_probe_model_override: event.target.value })} />
 			</Field>
 			<NumberOverride id='channel-probe-interval' label={t('providers.editor.probeInterval')} value={ch.active_probe_interval_seconds_override} placeholder={form.active_probe_interval_seconds_override ?? settings?.monoize_active_probe_interval_seconds} onChange={value => update({ active_probe_interval_seconds_override: value })} trackNumber={trackNumber} />
 			<NumberOverride id='channel-probe-threshold' label={t('providers.editor.probeSuccessThreshold')} value={ch.active_probe_success_threshold_override} placeholder={form.active_probe_success_threshold_override ?? settings?.monoize_active_probe_success_threshold} onChange={value => update({ active_probe_success_threshold_override: value })} trackNumber={trackNumber} />
+			<InheritedBooleanOverride
+				id='channel-probe-stream'
+				label={t('settings.activeProbeStream')}
+				value={ch.active_probe_stream_override}
+				providerValue={form.active_probe_stream_override}
+				globalValue={settings?.monoize_active_probe_stream}
+				onChange={value => update({ active_probe_stream_override: value })}
+			/>
 			<NumberOverride id='channel-failure-threshold' label={t('providers.editor.failureThreshold')} value={ch.passive_failure_count_threshold_override} placeholder={settings?.monoize_passive_failure_threshold} onChange={value => update({ passive_failure_count_threshold_override: value })} trackNumber={trackNumber} />
 			<NumberOverride id='channel-window' label={t('providers.editor.windowSeconds')} value={ch.passive_window_seconds_override} placeholder={settings?.monoize_passive_window_seconds} onChange={value => update({ passive_window_seconds_override: value })} trackNumber={trackNumber} />
-			<NumberOverride id='channel-cooldown' label={t('providers.editor.cooldownSeconds')} value={ch.passive_cooldown_seconds_override} placeholder={settings?.monoize_passive_cooldown_seconds} onChange={value => update({ passive_cooldown_seconds_override: value })} trackNumber={trackNumber} />
+			<InheritedBooleanOverride
+				id='channel-honor-rate-limit'
+				label={t('settings.honorRateLimit')}
+				value={ch.honor_rate_limit_override}
+				providerValue={form.honor_rate_limit_override}
+				globalValue={settings?.monoize_honor_rate_limit}
+				onChange={value => update({ honor_rate_limit_override: value })}
+			/>
 			<NumberOverride id='channel-rate-limit-cooldown' label={t('providers.editor.rateLimitCooldownSeconds')} value={ch.passive_rate_limit_cooldown_seconds_override} placeholder={settings?.monoize_passive_rate_limit_cooldown_seconds} onChange={value => update({ passive_rate_limit_cooldown_seconds_override: value })} trackNumber={trackNumber} />
+			<NumberOverride id='channel-cooldown' label={t('providers.editor.cooldownSeconds')} value={ch.passive_cooldown_seconds_override} placeholder={settings?.monoize_passive_cooldown_seconds} onChange={value => update({ passive_cooldown_seconds_override: value })} trackNumber={trackNumber} />
 		</AdvancedGroup>
 	</div>
 }
@@ -1087,6 +1107,25 @@ function NumberOverride({ id, label, value, placeholder, min = 1, unit, hint, on
 function NullableBoolean({ id, label, hint, nullLabel, enabledLabel, disabledLabel, value, onChange }: { id: string; label: string; hint?: string; nullLabel?: string; enabledLabel?: string; disabledLabel?: string; value: boolean | null; onChange: (value: boolean | null) => void }) {
 	const { t } = useTranslation()
 	return <Field id={id} label={label} hint={hint}><Select value={value == null ? 'inherit' : value ? 'enabled' : 'disabled'} onValueChange={next => onChange(next === 'inherit' ? null : next === 'enabled')}><SelectTrigger id={id}><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value='inherit'>{nullLabel ?? t('providers.editor.inheritGlobal')}</SelectItem><SelectItem value='enabled'>{enabledLabel ?? t('common.enabled')}</SelectItem><SelectItem value='disabled'>{disabledLabel ?? t('common.disabled')}</SelectItem></SelectGroup></SelectContent></Select></Field>
+}
+
+function InheritedBooleanOverride({ id, label, value, providerValue, globalValue, onChange }: {
+	id: string
+	label: string
+	value: boolean | null
+	providerValue?: boolean | null
+	globalValue?: boolean
+	onChange: (value: boolean | null) => void
+}) {
+	const { t } = useTranslation()
+	const inherited = providerValue ?? globalValue
+	const on = t('settings.valueOn')
+	const off = t('settings.valueOff')
+	const nullLabel = inherited === undefined ? undefined : t(
+		providerValue != null ? 'providers.editor.inheritProviderValue' : 'providers.editor.inheritGlobalValue',
+		{ value: inherited ? on : off }
+	)
+	return <NullableBoolean id={id} label={label} hint={value == null ? undefined : nullLabel} nullLabel={nullLabel} enabledLabel={on} disabledLabel={off} value={value} onChange={onChange} />
 }
 
 function AffinityModeOverride({ id, label, value, onChange }: { id: string; label: string; value: AffinityFailbackMode | null; onChange: (value: AffinityFailbackMode | null) => void }) {
@@ -1157,12 +1196,25 @@ function RoutingSettings({ form, setForm, settings, position, trackNumber }: { f
 				<h4 className='font-medium'>{t('providers.editor.providerHealthTitle')}</h4>
 				<p className='mt-1 text-xs text-muted-foreground'>{t('providers.editor.providerHealthHint')}</p>
 			</div>
-			<NullableBoolean id='provider-probe-enabled' label={t('providers.editor.activeProbing')} value={form.active_probe_enabled_override} onChange={value => setForm(previous => ({ ...previous, active_probe_enabled_override: value }))} />
+			<InheritedBooleanOverride
+				id='provider-honor-rate-limit'
+				label={t('settings.honorRateLimit')}
+				value={form.honor_rate_limit_override}
+				globalValue={settings?.monoize_honor_rate_limit}
+				onChange={value => setForm(previous => ({ ...previous, honor_rate_limit_override: value }))}
+			/>
 			<Field id='provider-probe-model' label={t('providers.editor.probeModel')} hint={t('providers.editor.probeModelHint', { model: settings?.monoize_active_probe_model || t('providers.editor.firstChannelModel') })}>
 				<Input id='provider-probe-model' value={form.active_probe_model_override} onChange={event => setForm(previous => ({ ...previous, active_probe_model_override: event.target.value }))} />
 			</Field>
 			<NumberOverride id='provider-probe-interval' label={t('providers.editor.probeInterval')} value={form.active_probe_interval_seconds_override} placeholder={settings?.monoize_active_probe_interval_seconds} onChange={value => setForm(previous => ({ ...previous, active_probe_interval_seconds_override: value }))} trackNumber={trackNumber} />
 			<NumberOverride id='provider-probe-threshold' label={t('providers.editor.probeSuccessThreshold')} value={form.active_probe_success_threshold_override} placeholder={settings?.monoize_active_probe_success_threshold} onChange={value => setForm(previous => ({ ...previous, active_probe_success_threshold_override: value }))} trackNumber={trackNumber} />
+			<InheritedBooleanOverride
+				id='provider-probe-stream'
+				label={t('settings.activeProbeStream')}
+				value={form.active_probe_stream_override}
+				globalValue={settings?.monoize_active_probe_stream}
+				onChange={value => setForm(previous => ({ ...previous, active_probe_stream_override: value }))}
+			/>
 		</div>
 	</div>
 }

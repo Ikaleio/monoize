@@ -1,6 +1,7 @@
 mod account_balance;
 mod attempts;
 mod billing;
+pub(crate) mod channel_probe;
 mod compact;
 mod count_tokens;
 mod decisions;
@@ -45,6 +46,7 @@ use billing::*;
 use helpers::*;
 use json_forward::*;
 use nonstream::*;
+pub(crate) use request_logging::apply_usage_fields;
 use request_logging::*;
 use routing::*;
 use streaming::*;
@@ -811,7 +813,9 @@ struct MonoizeAttempt {
     passive_failure_count_threshold: u32,
     passive_cooldown_seconds: u64,
     passive_window_seconds: u64,
-    passive_rate_limit_cooldown_seconds: u64,
+    rate_limit_wait: Option<u64>,
+    probe_interval: u64,
+    recovery_mode: crate::monoize_routing::RecoveryMode,
     channel_max_retries: i32,
     channel_retry_interval_ms: u64,
     circuit_breaker_enabled: bool,
@@ -868,7 +872,14 @@ struct MonoizeAttempt {
     /// RTA-6c: `scheme://host:port` from Channel `base_url`, when parseable.
     origin_key: Option<String>,
     /// Enabled positive-weight Channels of this Provider that share `origin_key`.
-    origin_peer_channel_ids: Vec<String>,
+    origin_peers: Option<Arc<[OriginPeer]>>,
+}
+
+#[derive(Clone, Debug)]
+struct OriginPeer {
+    channel_id: String,
+    recovery_mode: crate::monoize_routing::RecoveryMode,
+    probe_interval: u64,
 }
 
 fn reasoning_envelope_provider_type(provider_type: ProviderType) -> &'static str {
@@ -921,6 +932,8 @@ struct TriedProvider {
     upstream_type: Option<String>,
     upstream_param: Option<String>,
     duration_ms: Option<u64>,
+    #[serde(skip)]
+    target_capability: bool,
 }
 
 impl TriedProvider {
@@ -966,6 +979,7 @@ impl TriedProvider {
             upstream_type: app_err.upstream_type.clone(),
             upstream_param: app_err.upstream_param.clone(),
             duration_ms,
+            target_capability: app_err.target_capability,
         }
     }
 }
@@ -1071,6 +1085,7 @@ pub(crate) struct StreamRuntimeMetrics {
     response_model: Option<String>,
     response_model_terminal: bool,
     terminal: StreamTerminalDiagnostics,
+    upstream_terminal_rate_limited: bool,
     pub(crate) estimated_output_tokens: u64,
     // Feeds the usage-less billing estimate only; TPS is derived at display
     // time from `output_tokens`, `duration_ms`, and `ttfb_ms` (request-logs

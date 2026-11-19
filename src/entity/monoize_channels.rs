@@ -22,11 +22,12 @@ pub struct Model {
     pub passive_cooldown_seconds_override: Option<i32>,
     pub passive_window_seconds_override: Option<i32>,
     pub passive_rate_limit_cooldown_seconds_override: Option<i32>,
-    pub active_probe_enabled_override: Option<i32>,
+    pub honor_rate_limit_override: Option<i32>,
     pub active_probe_interval_seconds_override: Option<i32>,
     pub active_probe_success_threshold_override: Option<i32>,
     #[sea_orm(column_type = "Text")]
     pub active_probe_model_override: Option<String>,
+    pub active_probe_stream_override: Option<i32>,
     pub affinity_enabled_override: Option<i32>,
     pub affinity_idle_ttl_seconds_override: Option<i32>,
     #[sea_orm(column_type = "Text")]

@@ -64,7 +64,7 @@ pub(super) async fn forward_json_attempts(
     )
     .await?;
     let mut driver = AttemptDriver::new(attempts);
-    while let Some(slot) = driver.next() {
+    while let Some(slot) = driver.next(ctx.state).await {
         match call_json_attempt(ctx.state, &slot.attempt, endpoint).await? {
             Ok(value) => {
                 match execution

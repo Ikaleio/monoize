@@ -138,9 +138,12 @@ pub async fn delete_group(
 
     // GR-X6: provider group sets may have changed; force re-validation of
     // in-flight affinity bindings and cached routing decisions.
-    state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
-    // DPT-RC4: GR-X3 rewrote `monoize_providers.group_ids`.
-    state.monoize_store.invalidate_routing_catalog();
+    {
+        let _health = state.channel_health.lock().await;
+        // DPT-RC4: GR-X3 rewrote `monoize_providers.group_ids`.
+        state.monoize_store.invalidate_routing_catalog();
+        state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
+    }
 
     Ok(Json(json!({ "success": true })))
 }

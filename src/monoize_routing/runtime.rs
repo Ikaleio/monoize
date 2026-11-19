@@ -1,9 +1,12 @@
-use super::types::AffinityFailbackMode;
+use super::types::{AffinityFailbackMode, MonoizeChannel, MonoizeProvider};
 use crate::settings::default_reasoning_suffix_map;
 use crate::transforms::TransformRuleConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::OnceLock;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,11 +18,11 @@ pub struct MonoizeRuntimeConfig {
     pub passive_cooldown_seconds: u64,
     pub passive_window_seconds: u64,
     pub passive_rate_limit_cooldown_seconds: u64,
-    pub active_enabled: bool,
+    pub honor_rate_limit: bool,
     pub active_interval_seconds: u64,
     pub active_success_threshold: u32,
-    pub active_method: String,
     pub active_probe_model: Option<String>,
+    pub active_probe_stream: bool,
     pub global_transforms: Vec<TransformRuleConfig>,
     pub global_model_redirects: Vec<crate::users::ModelRedirectRule>,
     #[serde(skip)]
@@ -53,11 +56,11 @@ impl Default for MonoizeRuntimeConfig {
             passive_cooldown_seconds: 60,
             passive_window_seconds: 30,
             passive_rate_limit_cooldown_seconds: 15,
-            active_enabled: true,
+            honor_rate_limit: false,
             active_interval_seconds: 30,
             active_success_threshold: 1,
-            active_method: "completion".to_string(),
             active_probe_model: None,
+            active_probe_stream: true,
             global_transforms: Vec::new(),
             global_model_redirects: Vec::new(),
             compiled_global_model_redirects: Vec::new(),
@@ -81,6 +84,45 @@ impl Default for MonoizeRuntimeConfig {
 }
 
 impl MonoizeRuntimeConfig {
+    pub fn probe_stream(&self, provider: &MonoizeProvider, channel: &MonoizeChannel) -> bool {
+        channel
+            .active_probe_stream_override
+            .or(provider.active_probe_stream_override)
+            .unwrap_or(self.active_probe_stream)
+    }
+
+    pub fn rate_limit_wait(
+        &self,
+        provider: &MonoizeProvider,
+        channel: &MonoizeChannel,
+    ) -> Option<u64> {
+        channel
+            .honor_rate_limit_override
+            .or(provider.honor_rate_limit_override)
+            .unwrap_or(self.honor_rate_limit)
+            .then(|| {
+                channel
+                    .passive_rate_limit_cooldown_seconds_override
+                    .unwrap_or(self.passive_rate_limit_cooldown_seconds)
+                    .max(1)
+            })
+    }
+
+    pub fn probe_interval(&self, provider: &MonoizeProvider, channel: &MonoizeChannel) -> u64 {
+        channel
+            .active_probe_interval_seconds_override
+            .or(provider.active_probe_interval_seconds_override)
+            .unwrap_or(self.active_interval_seconds)
+            .max(1)
+    }
+
+    pub fn request_timeout(&self, provider: &MonoizeProvider) -> u64 {
+        provider
+            .request_timeout_ms_override
+            .unwrap_or(self.request_timeout_ms)
+            .max(1)
+    }
+
     pub fn set_global_model_redirects(
         &mut self,
         rules: Vec<crate::users::ModelRedirectRule>,
@@ -92,14 +134,41 @@ impl MonoizeRuntimeConfig {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ChannelHealthState {
     pub healthy: bool,
     pub last_success_at: Option<i64>,
-    pub cooldown_until: Option<i64>,
     pub probe_success_count: u32,
     pub last_probe_at: Option<i64>,
     pub passive_failure_timestamps: VecDeque<i64>,
+    pub trip_id: Option<u64>,
+    pub trip_time: Option<i64>,
+    pub trip_rate_limited: bool,
+    pub trip_retry_after_seconds: Option<u16>,
+    pub recovery_mode: Option<RecoveryMode>,
+    pub next_recovery_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryMode {
+    Probe,
+    Timed,
+}
+
+pub fn recovery_deadline(now: i64, wait_seconds: u64) -> i64 {
+    now.saturating_add(i64::try_from(wait_seconds).unwrap_or(i64::MAX))
+}
+
+pub fn recovery_wait(
+    ordinary_wait: u64,
+    rate_limit_wait: Option<u64>,
+    rate_limited: bool,
+    retry_after_seconds: Option<u16>,
+) -> u64 {
+    match rate_limit_wait {
+        Some(wait) if rate_limited => wait.max(u64::from(retry_after_seconds.unwrap_or(0))),
+        _ => ordinary_wait,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -229,42 +298,67 @@ fn prepare_channel_health_insert_with_limit(
     health.contains_key(key) || health.len() < limit
 }
 
-pub fn missing_channel_health_is_saturated(
-    health: &HashMap<String, ChannelHealthState>,
-    key: &str,
-) -> bool {
-    missing_channel_health_is_saturated_with_limit(health, key, channel_health_max_entries())
-}
-
-fn missing_channel_health_is_saturated_with_limit(
-    health: &HashMap<String, ChannelHealthState>,
-    key: &str,
-    limit: usize,
-) -> bool {
-    !health.contains_key(key) && health.len() >= limit
-}
-
-impl ChannelHealthState {
-    pub fn new() -> Self {
+impl Default for ChannelHealthState {
+    fn default() -> Self {
         Self {
             healthy: true,
             last_success_at: None,
-            cooldown_until: None,
             probe_success_count: 0,
             last_probe_at: None,
             passive_failure_timestamps: VecDeque::new(),
+            trip_id: None,
+            trip_time: None,
+            trip_rate_limited: false,
+            trip_retry_after_seconds: None,
+            recovery_mode: None,
+            next_recovery_at: None,
         }
     }
+}
 
-    pub fn status(&self, now_ts: i64) -> &'static str {
-        if self.healthy {
-            return "healthy";
-        }
-        if let Some(until) = self.cooldown_until
-            && now_ts < until
-        {
-            return "unhealthy";
-        }
-        "probing"
+impl ChannelHealthState {
+    pub fn is_unhealthy(&self, now: i64) -> bool {
+        !self.healthy
+            && match self.recovery_mode {
+                Some(RecoveryMode::Probe) => true,
+                Some(RecoveryMode::Timed) => {
+                    self.next_recovery_at.is_some_and(|deadline| now < deadline)
+                }
+                None => false,
+            }
+    }
+
+    pub fn mark_success(&mut self, now: i64) {
+        self.healthy = true;
+        self.last_success_at = Some(now);
+        self.probe_success_count = 0;
+        self.last_probe_at = None;
+        self.trip_id = None;
+        self.trip_time = None;
+        self.trip_rate_limited = false;
+        self.trip_retry_after_seconds = None;
+        self.recovery_mode = None;
+        self.next_recovery_at = None;
+    }
+
+    pub fn trip(
+        &mut self,
+        now: i64,
+        mode: RecoveryMode,
+        rate_limited: bool,
+        retry_after: Option<u16>,
+        wait: u64,
+    ) {
+        static NEXT_TRIP_ID: AtomicU64 = AtomicU64::new(1);
+        let trip_id = NEXT_TRIP_ID.fetch_add(1, Ordering::Relaxed);
+        self.healthy = false;
+        self.trip_id = Some(trip_id);
+        self.trip_time = Some(now);
+        self.trip_rate_limited = rate_limited;
+        self.trip_retry_after_seconds = retry_after;
+        self.recovery_mode = Some(mode);
+        self.next_recovery_at = Some(recovery_deadline(now, wait));
+        self.probe_success_count = 0;
+        self.last_probe_at = None;
     }
 }

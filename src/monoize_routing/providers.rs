@@ -77,14 +77,14 @@ impl MonoizeRoutingStore {
                         id, name, max_retries, channel_max_retries,
                         channel_retry_interval_ms, circuit_breaker_enabled,
                         per_model_circuit_break, transforms, api_type_overrides,
-                        active_probe_enabled_override, active_probe_interval_seconds_override,
-                        active_probe_success_threshold_override, active_probe_model_override,
+                        honor_rate_limit_override, active_probe_interval_seconds_override,
+                        active_probe_success_threshold_override, active_probe_model_override, active_probe_stream_override,
                         request_timeout_ms_override, extra_fields_whitelist,
                         strip_cross_protocol_nested_extra, group_ids,
                         allow_free_when_unpriced_override,
                         allow_free_when_missing_usage_override,
                         enabled, priority, created_at, updated_at
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)"#,
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)"#,
                 vec![
                         id.clone().into(),
                         input.name.clone().into(),
@@ -95,7 +95,7 @@ impl MonoizeRoutingStore {
                         SeaValue::Int(Some(if input.per_model_circuit_break { 1 } else { 0 })),
                         transforms_json.into(),
                         api_type_overrides_json.into(),
-                        opt_bool_to_value(input.active_probe_enabled_override),
+                        opt_bool_to_value(input.honor_rate_limit_override),
                         opt_u64_to_value(input.active_probe_interval_seconds_override),
                         opt_u64_to_value(
                             input
@@ -103,6 +103,7 @@ impl MonoizeRoutingStore {
                                 .map(|v| v as u64),
                         ),
                         input.active_probe_model_override.clone().into(),
+                        opt_bool_to_value(input.active_probe_stream_override),
                         opt_u64_to_value(input.request_timeout_ms_override),
                         extra_fields_whitelist_json.into(),
                         opt_bool_to_value(strip_cross_proto),
@@ -183,8 +184,8 @@ impl MonoizeRoutingStore {
                     .into(),
             );
         }
-        if let Some(value) = input.active_probe_enabled_override {
-            push_value("active_probe_enabled_override", opt_bool_to_value(value));
+        if let Some(value) = input.honor_rate_limit_override {
+            push_value("honor_rate_limit_override", opt_bool_to_value(value));
         }
         if let Some(value) = input.active_probe_interval_seconds_override {
             push_value(
@@ -200,6 +201,9 @@ impl MonoizeRoutingStore {
         }
         if let Some(value) = &input.active_probe_model_override {
             push_value("active_probe_model_override", value.clone().into());
+        }
+        if let Some(value) = input.active_probe_stream_override {
+            push_value("active_probe_stream_override", opt_bool_to_value(value));
         }
         if let Some(value) = input.request_timeout_ms_override {
             push_value("request_timeout_ms_override", opt_u64_to_value(value));

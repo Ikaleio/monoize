@@ -127,9 +127,9 @@ Expand the Provider and click **Choose models to test** on the Channel row, or c
 
 The Channel switch in the expanded Provider row turns the Channel on or off immediately, without opening the editor.
 
-The test sends a short streaming completion with a 16-token output cap. HTTP 2xx is not enough. The stream must reach a protocol terminal event.
+For completion tests, **Quick Test** uses the Channel's effective stream setting. The test dialog starts with the same setting. Use **Stream response** to change the initial mode for models that support streaming tests. Image and decision tests always use non-streaming requests.
 
-For a Responses Channel, `response.completed` is a pass. `response.incomplete` without an error object is also a pass. A reasoning model can hit the 16-token cap and return `incomplete`. That result still means the Channel is reachable.
+The test uses the same request pipeline and success rules as the [automatic probe](/en/docs/routing). Request transforms can change the stream mode or the initial 16-token output limit for completion tests. For a streaming test, HTTP `2xx` alone is not enough. The decoder must reach a terminal event without an error event. For a non-streaming completion test, the decoder must accept the response body.
 
 ## Map models
 

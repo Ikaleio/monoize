@@ -172,7 +172,7 @@ const MESSAGES_SAME_FAMILY_EXTRA_FIELDS: &[&str] =
 pub(in crate::handlers) fn filter_extra_body_for_provider(
     req: &mut urp::UrpRequest,
     provider_type: ProviderType,
-    downstream: DownstreamProtocol,
+    same_family: bool,
     provider_override: &Option<Vec<String>>,
 ) {
     if let Some(overrides) = provider_override
@@ -190,7 +190,6 @@ pub(in crate::handlers) fn filter_extra_body_for_provider(
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
-    let same_family = downstream.is_same_family(provider_type);
 
     req.extra_body.retain(|k, _| {
         urp::is_internal_key(k)

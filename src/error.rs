@@ -27,6 +27,8 @@ pub struct AppErrorBody {
     pub upstream_code: Option<String>,
     pub upstream_type: Option<String>,
     pub upstream_param: Option<String>,
+    pub(crate) retry_after_seconds: Option<u16>,
+    pub(crate) target_capability: bool,
     /// When set, request logs use this instead of `message` so the client
     /// receives sanitized text while internal logs retain full detail.
     pub internal_message: Option<String>,
@@ -109,6 +111,8 @@ impl AppError {
             upstream_code: None,
             upstream_type: None,
             upstream_param: None,
+            retry_after_seconds: None,
+            target_capability: false,
             internal_message: None,
             downstream_stream_terminal_sent: false,
             forwarded_headers: Vec::new(),

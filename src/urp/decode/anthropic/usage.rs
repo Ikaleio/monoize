@@ -1,4 +1,6 @@
-use crate::urp::decode::{deserialize_u64ish_default, retain_wire_extra_fields, value_to_u64};
+use crate::urp::decode::{
+    deserialize_u64ish_default, deserialize_u64ish_optional, retain_wire_extra_fields, value_to_u64,
+};
 use crate::urp::{InputDetails, OutputDetails, Usage, is_internal_key};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -8,16 +10,16 @@ use std::collections::HashMap;
 struct AnthropicUsage {
     #[serde(
         default,
-        deserialize_with = "deserialize_u64ish_default",
+        deserialize_with = "deserialize_u64ish_optional",
         alias = "prompt_tokens"
     )]
-    input_tokens: u64,
+    input_tokens: Option<u64>,
     #[serde(
         default,
-        deserialize_with = "deserialize_u64ish_default",
+        deserialize_with = "deserialize_u64ish_optional",
         alias = "completion_tokens"
     )]
-    output_tokens: u64,
+    output_tokens: Option<u64>,
     #[serde(
         default,
         deserialize_with = "deserialize_u64ish_default",
@@ -141,6 +143,7 @@ impl From<AnthropicUsage> for Usage {
         // (user-billing-and-model-metadata.spec.md § 5 C3-ii). Messages encoders subtract them back out.
         let normalized_input_tokens = value
             .input_tokens
+            .unwrap_or(0)
             .saturating_add(value.cache_read_input_tokens)
             .saturating_add(value.cache_creation_input_tokens);
 
@@ -148,8 +151,9 @@ impl From<AnthropicUsage> for Usage {
             iterations: crate::urp::usage::decode_messages_iterations(
                 value.extra.remove("iterations").as_ref(),
             ),
+            reported_token_counts: value.input_tokens.is_some() && value.output_tokens.is_some(),
             input_tokens: normalized_input_tokens,
-            output_tokens: value.output_tokens,
+            output_tokens: value.output_tokens.unwrap_or(0),
             input_details,
             output_details,
             extra_body: value.extra,

@@ -9,9 +9,9 @@ use super::*;
 
 pub(super) use codec::{
     decode_response_from_provider, encode_request_for_provider, encode_response_for_downstream,
-    responses_request_echo_for_attempt,
+    encode_upstream_request, responses_request_echo_for_attempt, upstream_encode_error,
 };
-pub(super) use prepare::shape_request_for_attempt;
+pub(super) use prepare::{shape_request_for_attempt, shape_upstream_request};
 
 pub(super) struct AdmittedRequestTaskState {
     started_at: std::time::Instant,
@@ -179,7 +179,7 @@ async fn execute_nonstream<T>(
 ) -> AppResult<(urp::UrpResponse, String, T, crate::error::ForwardedHeaders)> {
     let mut run =
         NonstreamRun::admit(inputs, req, client_session_id, strip_foreign_response).await?;
-    while let Some(mut slot) = run.attempts.next() {
+    while let Some(mut slot) = run.attempts.next(run.inputs.state).await {
         match run
             .try_channel(&mut slot.attempt, slot.position, &accept)
             .await?

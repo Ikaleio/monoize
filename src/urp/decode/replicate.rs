@@ -270,21 +270,16 @@ fn looks_like_media_url(s: &str) -> bool {
 
 fn parse_replicate_usage(obj: &Map<String, Value>) -> Option<Usage> {
     let metrics = obj.get("metrics").and_then(|v| v.as_object())?;
-    let input_tokens = metrics
-        .get("input_token_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let output_tokens = metrics
-        .get("output_token_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    if input_tokens == 0 && output_tokens == 0 {
+    let input_tokens = metrics.get("input_token_count").and_then(|v| v.as_u64());
+    let output_tokens = metrics.get("output_token_count").and_then(|v| v.as_u64());
+    if input_tokens.unwrap_or(0) == 0 && output_tokens.unwrap_or(0) == 0 {
         return None;
     }
     Some(Usage {
         iterations: None,
-        input_tokens,
-        output_tokens,
+        reported_token_counts: input_tokens.is_some() && output_tokens.is_some(),
+        input_tokens: input_tokens.unwrap_or(0),
+        output_tokens: output_tokens.unwrap_or(0),
         input_details: None,
         output_details: None,
         extra_body: HashMap::new(),

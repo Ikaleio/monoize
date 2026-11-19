@@ -34,7 +34,7 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 2. **傳輸失敗。** 訊息為 `failed to request upstream`。檢查 Channel base URL 和代理。
 3. **路由不存在。** 確認至少有一個已啟用的 Provider 擁有一個已啟用、權重大於零、且映射了該模型的 Channel。
 4. **群組無交集。** 金鑰的群組必須與 Provider 至少共享一個群組。參見 [API 金鑰](/zh-TW/docs/dashboard/api-keys)。
-5. **所有 Channel 不健康。** 斷路器在冷卻期內跳過不健康的 Channel。檢視日誌行中的失敗嘗試，找到根本的上游錯誤。
+5. **所有符合其他路由條件的 Channel 都不健康。** 啟用斷路器後，Monoize 不會向不健康的 Channel 轉送流量。探測連續成功次數達到門檻、儀表板測試通過，或定時復原的等候時間結束後，才可恢復轉送。查看該筆日誌中的失敗嘗試，找出上游錯誤。
 6. **倍率上限。** 設定了 `max_multiplier` 的金鑰會跳過價格高於上限的模型條目。
 
 ### 其他上游狀態碼和錯誤碼
@@ -44,6 +44,13 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 ### `400 unsupported_tool`
 
 請求把 `openrouter:*` 工具或其他沒有 Chat 編碼的工具類型傳送給無法表示它的 Chat 方言。請移除該工具，或把模型路由到 `openrouter` 或 `generic` 方言的 Channel。參見 [API 端點](/zh-TW/docs/endpoints)。
+
+### Chat 工具結果出現 `400 unsupported_media`
+
+- `Chat tool results support text only; image content cannot be discarded.`
+- `Chat tool results support text only; file content cannot be discarded.`
+
+選定的 Chat 方言無法傳送工具結果中的圖片或檔案。Monoize 不會將這次請求送往上游，而是在嘗試次數限制內轉向下一個符合條件的 Channel 或 Provider。如果沒有相容的路由，請將模型路由到支援該內容的 Channel，例如採用 `openrouter` 方言的 Chat Channel，或相容的 Responses、Messages 或 Gemini Channel。實際支援的內容取決於媒體格式和來源。
 
 ### 內建工具沒有生效
 

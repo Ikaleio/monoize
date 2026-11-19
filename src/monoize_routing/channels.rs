@@ -7,20 +7,18 @@ use sea_orm::{ConnectionTrait, Value as SeaValue};
 use std::collections::{BTreeMap, HashMap};
 
 impl MonoizeRoutingStore {
-    /// CM-CH-EN-1: flips one Channel's `enabled` flag without touching any other field.
+    /// CM-CH-EN-1: returns whether `enabled` changed, or `None` for a missing Channel.
     pub async fn set_channel_enabled(
         &self,
         provider_id: &str,
         channel_id: &str,
         enabled: bool,
-    ) -> Result<bool, String> {
-        let result = self
-            .db
-            .write()
-            .await
+    ) -> Result<Option<bool>, String> {
+        let conn = self.db.write().await;
+        let result = conn
             .execute(self.db.stmt(
                 "UPDATE monoize_channels SET enabled = $1, updated_at = $2
-                 WHERE id = $3 AND provider_id = $4",
+                 WHERE id = $3 AND provider_id = $4 AND enabled <> $1",
                 vec![
                     SeaValue::Int(Some(i32::from(enabled))),
                     Utc::now().to_rfc3339().into(),
@@ -31,10 +29,17 @@ impl MonoizeRoutingStore {
             .await
             .map_err(|e| e.to_string())?;
         if result.rows_affected() == 0 {
-            return Ok(false);
+            return conn
+                .query_one(self.db.stmt(
+                    "SELECT 1 FROM monoize_channels WHERE id = $1 AND provider_id = $2",
+                    vec![channel_id.into(), provider_id.into()],
+                ))
+                .await
+                .map(|row| row.map(|_| false))
+                .map_err(|e| e.to_string());
         }
         self.catalog.invalidate();
-        Ok(true)
+        Ok(Some(true))
     }
 
     pub(super) async fn replace_channels_on(
@@ -106,7 +111,7 @@ impl MonoizeRoutingStore {
     ) -> Result<(), String> {
         const CHANNEL_INSERT_CHUNK_SIZE: usize = 18;
         for chunk in prepared.chunks(CHANNEL_INSERT_CHUNK_SIZE) {
-            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 27);
+            let mut values: Vec<SeaValue> = Vec::with_capacity(chunk.len() * 28);
             let mut rows = Vec::with_capacity(chunk.len());
             for channel in chunk {
                 let start = values.len() + 1;
@@ -128,7 +133,7 @@ impl MonoizeRoutingStore {
                     opt_u64_to_value(input.passive_cooldown_seconds_override),
                     opt_u64_to_value(input.passive_window_seconds_override),
                     opt_u64_to_value(input.passive_rate_limit_cooldown_seconds_override),
-                    opt_bool_to_value(input.active_probe_enabled_override),
+                    opt_bool_to_value(input.honor_rate_limit_override),
                     opt_u64_to_value(input.active_probe_interval_seconds_override),
                     opt_u64_to_value(
                         input
@@ -136,6 +141,7 @@ impl MonoizeRoutingStore {
                             .map(|value| value as u64),
                     ),
                     input.active_probe_model_override.clone().into(),
+                    opt_bool_to_value(input.active_probe_stream_override),
                     opt_bool_to_value(input.affinity_enabled_override),
                     opt_u64_to_value(input.affinity_idle_ttl_seconds_override),
                     input
@@ -156,7 +162,7 @@ impl MonoizeRoutingStore {
                 ]);
                 rows.push(format!(
                     "({})",
-                    (start..start + 27)
+                    (start..start + 28)
                         .map(|index| format!("${index}"))
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -168,8 +174,8 @@ impl MonoizeRoutingStore {
                      (id, provider_id, name, provider_type, base_url, api_key, weight, enabled,
                       passive_failure_count_threshold_override, passive_cooldown_seconds_override,
                       passive_window_seconds_override, passive_rate_limit_cooldown_seconds_override,
-                      active_probe_enabled_override, active_probe_interval_seconds_override,
-                      active_probe_success_threshold_override, active_probe_model_override,
+                      honor_rate_limit_override, active_probe_interval_seconds_override,
+                      active_probe_success_threshold_override, active_probe_model_override, active_probe_stream_override,
                       affinity_enabled_override, affinity_idle_ttl_seconds_override,
                       affinity_failback_mode_override, affinity_failback_delay_seconds_override,
                       proxy_url,

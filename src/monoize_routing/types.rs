@@ -5,6 +5,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
+pub(crate) fn deserialize_nullable_override<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MonoizeProviderType {
@@ -151,14 +161,14 @@ pub struct MonoizeChannel {
     /// CM-READ-1: serialized in ascending key order so API reads are stable.
     #[serde(default, serialize_with = "serialize_sorted_models")]
     pub models: HashMap<String, MonoizeModelEntry>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_probe_enabled_override: Option<bool>,
+    pub honor_rate_limit_override: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_probe_interval_seconds_override: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_probe_success_threshold_override: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_probe_model_override: Option<String>,
+    pub active_probe_stream_override: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affinity_enabled_override: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,16 +193,12 @@ pub struct MonoizeChannel {
     pub chat_dialect: Option<ChatDialect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _healthy: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub _last_success_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _health_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _unhealthy_models: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub _probing_models: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub _cooldown_until: Option<String>,
+    pub _next_recovery_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,10 +215,11 @@ pub struct MonoizeProvider {
     pub transforms: Vec<TransformRuleConfig>,
     #[serde(default)]
     pub api_type_overrides: Vec<ApiTypeOverride>,
-    pub active_probe_enabled_override: Option<bool>,
+    pub honor_rate_limit_override: Option<bool>,
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
+    pub active_probe_stream_override: Option<bool>,
     pub request_timeout_ms_override: Option<u64>,
     #[serde(default)]
     pub extra_fields_whitelist: Option<Vec<String>>,
@@ -252,10 +259,11 @@ pub struct CreateMonoizeChannelInput {
     pub passive_rate_limit_cooldown_seconds_override: Option<u64>,
     #[serde(default)]
     pub models: HashMap<String, MonoizeModelEntry>,
-    pub active_probe_enabled_override: Option<bool>,
+    pub honor_rate_limit_override: Option<bool>,
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
+    pub active_probe_stream_override: Option<bool>,
     #[serde(default)]
     pub affinity_enabled_override: Option<bool>,
     #[serde(default)]
@@ -298,12 +306,13 @@ pub struct CreateMonoizeProviderInput {
     pub per_model_circuit_break: bool,
     #[serde(default)]
     pub transforms: Vec<TransformRuleConfig>,
-    pub active_probe_enabled_override: Option<bool>,
+    pub honor_rate_limit_override: Option<bool>,
     #[serde(default)]
     pub api_type_overrides: Vec<ApiTypeOverrideInput>,
     pub active_probe_interval_seconds_override: Option<u64>,
     pub active_probe_success_threshold_override: Option<u32>,
     pub active_probe_model_override: Option<String>,
+    pub active_probe_stream_override: Option<bool>,
     pub request_timeout_ms_override: Option<u64>,
     #[serde(default)]
     pub extra_fields_whitelist: Option<Vec<String>>,
@@ -331,11 +340,18 @@ pub struct UpdateMonoizeProviderInput {
     pub circuit_breaker_enabled: Option<bool>,
     pub per_model_circuit_break: Option<bool>,
     pub transforms: Option<Vec<TransformRuleConfig>>,
-    pub active_probe_enabled_override: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_override")]
+    pub honor_rate_limit_override: Option<Option<bool>>,
     pub api_type_overrides: Option<Vec<ApiTypeOverrideInput>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_override")]
     pub active_probe_interval_seconds_override: Option<Option<u64>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_override")]
     pub active_probe_success_threshold_override: Option<Option<u32>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_override")]
     pub active_probe_model_override: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_override")]
+    pub active_probe_stream_override: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_override")]
     pub request_timeout_ms_override: Option<Option<u64>>,
     pub extra_fields_whitelist: Option<Option<Vec<String>>>,
     pub strip_cross_protocol_nested_extra: Option<Option<bool>>,

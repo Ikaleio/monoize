@@ -1,6 +1,72 @@
 use super::*;
+use crate::urp::encode::openai_chat::ChatDialect;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum MediaError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    TargetCapability(String),
+}
+
+impl MediaError {
+    pub(crate) fn capability(message: &str) -> Self {
+        Self::TargetCapability(message.to_owned())
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Invalid(message) | Self::TargetCapability(message) => message,
+        }
+    }
+}
+
+impl From<String> for MediaError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+impl From<&str> for MediaError {
+    fn from(message: &str) -> Self {
+        Self::Invalid(message.to_owned())
+    }
+}
+
+impl From<MediaError> for String {
+    fn from(error: MediaError) -> Self {
+        match error {
+            MediaError::Invalid(message) | MediaError::TargetCapability(message) => message,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum MediaTarget {
+    Protocol(ProviderProtocol),
+    Chat(ChatDialect),
+}
+
+impl MediaTarget {
+    fn protocol(self) -> ProviderProtocol {
+        match self {
+            Self::Protocol(protocol) => protocol,
+            Self::Chat(_) => ProviderProtocol::ChatCompletion,
+        }
+    }
+
+    fn openrouter_chat(self) -> bool {
+        matches!(self, Self::Chat(ChatDialect::OpenRouter))
+    }
+}
+
+impl From<ProviderProtocol> for MediaTarget {
+    fn from(protocol: ProviderProtocol) -> Self {
+        Self::Protocol(protocol)
+    }
+}
 
 pub fn error_body(message: &str) -> Value {
     json!({"error":{"type":"invalid_request_error","code":"unsupported_media","message":message}})
@@ -157,7 +223,11 @@ fn check_resource(metadata: &MediaMetadata, target: ProviderProtocol) -> Result<
     Ok(())
 }
 
-fn check_url(url: &str, metadata: &MediaMetadata, target: ProviderProtocol) -> Result<(), String> {
+fn check_url(
+    url: &str,
+    metadata: &MediaMetadata,
+    target: ProviderProtocol,
+) -> Result<(), MediaError> {
     check_resource(metadata, target)?;
     if let Some(resource) = resource_for_url(url) {
         if metadata.resource.is_none() {
@@ -168,10 +238,15 @@ fn check_url(url: &str, metadata: &MediaMetadata, target: ProviderProtocol) -> R
         }
     }
     let parsed = reqwest::Url::parse(url).map_err(|_| "Media URL is invalid.".to_string())?;
+    if parsed.scheme() == "data" {
+        return Err("Media data URLs must be supplied as inline bytes.".into());
+    }
     if !matches!(parsed.scheme(), "http" | "https")
         && !(parsed.scheme() == "gs" && target == ProviderProtocol::Gemini)
     {
-        return Err("The target does not support this media URL scheme.".into());
+        return Err(MediaError::capability(
+            "The target does not support this media URL scheme.",
+        ));
     }
     Ok(())
 }
@@ -181,7 +256,7 @@ fn image(
     metadata: &mut MediaMetadata,
     target: ProviderProtocol,
     nested: bool,
-) -> Result<(), String> {
+) -> Result<(), MediaError> {
     if let ImageSource::Url { url, detail } = source
         && url.starts_with("data:")
     {
@@ -204,6 +279,9 @@ fn image(
                 .parse::<mime::Mime>()
                 .map_err(|_| "Image MIME type is invalid.".to_string())?;
             let mime = parsed_mime.essence_str();
+            if matches!(mime, "application/octet-stream" | "image/unknown") {
+                return Err(format!("The target does not support image MIME type {mime}. Convert the image bytes first.").into());
+            }
             let accepted = match target {
                 ProviderProtocol::Messages
                 | ProviderProtocol::ChatCompletion
@@ -225,17 +303,14 @@ fn image(
                 _ => true,
             };
             if !accepted {
-                return Err(format!(
+                return Err(MediaError::TargetCapability(format!(
                     "The target does not support image MIME type {mime}. Convert the image bytes first."
-                ));
+                )));
             }
             *media_type = mime.to_owned();
         }
         ImageSource::Url { url, .. } => {
             check_url(url, metadata, target)?;
-            if nested && target == ProviderProtocol::Gemini {
-                return Err("Gemini function-result images require inline Base64 data; URL parts are not supported.".into());
-            }
             if let Some(media_type) = &mut metadata.media_type {
                 let parsed_mime = media_type
                     .parse::<mime::Mime>()
@@ -250,11 +325,16 @@ fn image(
                     mime,
                     "image/png" | "image/jpeg" | "image/gif" | "image/webp"
                 ) {
-                    return Err(format!(
+                    return Err(MediaError::TargetCapability(format!(
                         "The target does not support image MIME type {mime}."
-                    ));
+                    )));
                 }
                 *media_type = mime.to_owned();
+            }
+            if nested && target == ProviderProtocol::Gemini {
+                return Err(MediaError::capability(
+                    "Gemini function-result images require inline Base64 data; URL parts are not supported.",
+                ));
             }
         }
         ImageSource::FileId { .. } => {
@@ -265,10 +345,9 @@ fn image(
                 target,
                 ProviderProtocol::ChatCompletion | ProviderProtocol::Gemini
             ) {
-                return Err(
-                    "This target has no image file_id carrier. Supply bytes or a public image URL."
-                        .into(),
-                );
+                return Err(MediaError::capability(
+                    "This target has no image file_id carrier. Supply bytes or a public image URL.",
+                ));
             }
         }
     }
@@ -280,7 +359,8 @@ fn file(
     metadata: &mut MediaMetadata,
     target: ProviderProtocol,
     nested: bool,
-) -> Result<(), String> {
+    openrouter_chat: bool,
+) -> Result<(), MediaError> {
     if matches!(source, FileSource::Text { .. } | FileSource::Base64 { .. }) {
         metadata.resource = None;
     }
@@ -292,7 +372,13 @@ fn file(
                 *media_type = infer_mime(data, metadata.filename.as_deref());
             }
             let mime = mime_essence(media_type);
-            if mime == "application/octet-stream" {
+            let compat_alias = matches!(
+                mime.as_str(),
+                "video/audio/s16le" | "video/audio/wav" | "video/text/timestamp"
+            );
+            if mime == "application/octet-stream"
+                || (!compat_alias && media_type.parse::<mime::Mime>().is_err())
+            {
                 return Err("File MIME type is unknown. Supply a MIME-bearing data URL or a filename with a supported extension.".into());
             }
             if target == ProviderProtocol::Messages && mime == "application/pdf" {
@@ -303,16 +389,16 @@ fn file(
                         text: decode_text(data)?,
                     };
                 } else {
-                    return Err(format!(
+                    return Err(MediaError::TargetCapability(format!(
                         "Messages does not support {media_type} as a document. Supply PDF or UTF-8 text."
-                    ));
+                    )));
                 }
             } else if (is_audio_mime(media_type) || mime.starts_with("video/"))
                 && target != ProviderProtocol::Gemini
             {
-                return Err(format!(
+                return Err(MediaError::TargetCapability(format!(
                     "The target does not support {media_type} as a file input."
-                ));
+                )));
             } else if target == ProviderProtocol::Gemini
                 && !(matches!(mime.as_str(), "application/pdf" | "application/rtf")
                     || is_text_mime(media_type)
@@ -320,19 +406,19 @@ fn file(
                     || mime.starts_with("video/")
                     || mime.starts_with("image/"))
             {
-                return Err(format!(
+                return Err(MediaError::TargetCapability(format!(
                     "Gemini does not support file MIME type {media_type}. Convert the document first."
-                ));
+                )));
             }
         }
         FileSource::Url { url } => {
             check_url(url, metadata, target)?;
-            if target == ProviderProtocol::ChatCompletion
+            if (target == ProviderProtocol::ChatCompletion && !openrouter_chat)
                 || (nested && target == ProviderProtocol::Gemini)
             {
-                return Err(
-                    "This target requires file bytes for this file URL. Supply Base64 data.".into(),
-                );
+                return Err(MediaError::capability(
+                    "This target requires file bytes for this file URL. Supply Base64 data.",
+                ));
             }
             if target == ProviderProtocol::Messages {
                 let mime = metadata.media_type.clone().or_else(|| {
@@ -343,7 +429,9 @@ fn file(
                     })
                 });
                 if mime.as_deref().map(mime_essence).as_deref() != Some("application/pdf") {
-                    return Err("Messages URL documents require a known PDF MIME type. Supply PDF bytes when the URL type is unknown.".into());
+                    return Err(MediaError::capability(
+                        "Messages URL documents require a known PDF MIME type. Supply PDF bytes when the URL type is unknown.",
+                    ));
                 }
             }
         }
@@ -354,7 +442,9 @@ fn file(
                 );
             }
             if target == ProviderProtocol::Gemini {
-                return Err("Gemini does not support this file_id carrier.".into());
+                return Err(MediaError::capability(
+                    "Gemini does not support this file_id carrier.",
+                ));
             }
         }
         FileSource::Content { .. } if target == ProviderProtocol::Messages => {
@@ -372,7 +462,7 @@ fn file(
 fn messages_document_content(
     source: &FileSource,
     metadata: &MediaMetadata,
-) -> Result<FileSource, String> {
+) -> Result<FileSource, MediaError> {
     let parts = prepare_tool_result_content(
         &bound_document_parts(source, metadata)?,
         ProviderProtocol::Messages,
@@ -546,10 +636,24 @@ fn document_prefix(metadata: &MediaMetadata) -> Option<ToolResultContent> {
     })
 }
 
+fn check_position(
+    prepared: Result<(), MediaError>,
+    unsupported: Option<&str>,
+) -> Result<(), MediaError> {
+    match (prepared, unsupported) {
+        (Err(error @ MediaError::Invalid(_)), _) => Err(error),
+        (_, Some(message)) => Err(MediaError::capability(message)),
+        (prepared, None) => prepared,
+    }
+}
+
 pub fn prepare_tool_result_content(
     content: &[ToolResultContent],
-    target: ProviderProtocol,
-) -> Result<Vec<ToolResultContent>, String> {
+    target: impl Into<MediaTarget>,
+) -> Result<Vec<ToolResultContent>, MediaError> {
+    let target = target.into();
+    let protocol = target.protocol();
+    let text_only_chat = protocol == ProviderProtocol::ChatCompletion && !target.openrouter_chat();
     let mut result = Vec::new();
     for part in content {
         let mut part = part.clone();
@@ -557,35 +661,33 @@ pub fn prepare_tool_result_content(
             ToolResultContent::Image {
                 source, metadata, ..
             } => {
-                if target == ProviderProtocol::ChatCompletion {
-                    return Err(
-                        "Chat tool results support text only; image content cannot be discarded."
-                            .into(),
-                    );
-                }
-                image(source, metadata, target, true)?;
+                check_position(
+                    image(source, metadata, protocol, true),
+                    text_only_chat.then_some(
+                        "Chat tool results support text only; image content cannot be discarded.",
+                    ),
+                )?;
             }
             ToolResultContent::File {
                 source, metadata, ..
             } => {
-                file(source, metadata, target, true)?;
-                if target != ProviderProtocol::Messages {
+                file(source, metadata, protocol, true, target.openrouter_chat())?;
+                if protocol != ProviderProtocol::Messages {
                     result.extend(document_prefix(metadata));
                     metadata.document_title = None;
                     metadata.document_context = None;
                 }
                 if matches!(source, FileSource::Text { .. } | FileSource::Content { .. })
-                    && target != ProviderProtocol::Messages
+                    && protocol != ProviderProtocol::Messages
                 {
                     let parts = expanded_document_parts(source, metadata)?;
                     result.extend(prepare_tool_result_content(&parts, target)?);
                     continue;
                 }
-                if target == ProviderProtocol::ChatCompletion {
-                    return Err(
-                        "Chat tool results support text only; file content cannot be discarded."
-                            .into(),
-                    );
+                if text_only_chat {
+                    return Err(MediaError::capability(
+                        "Chat tool results support text only; file content cannot be discarded.",
+                    ));
                 }
             }
             _ => {}
@@ -595,7 +697,12 @@ pub fn prepare_tool_result_content(
     Ok(result)
 }
 
-pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Node>, String> {
+pub fn prepare_nodes(
+    nodes: &[Node],
+    target: impl Into<MediaTarget>,
+) -> Result<Vec<Node>, MediaError> {
+    let target = target.into();
+    let protocol = target.protocol();
     let mut result = Vec::new();
     for node in nodes {
         let mut node = node.clone();
@@ -606,18 +713,19 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 role,
                 ..
             } => {
-                if target == ProviderProtocol::Messages
-                    && matches!(role, OrdinaryRole::System | OrdinaryRole::Developer)
-                {
-                    return Err(
-                        "Messages system content supports text only; images cannot be discarded."
-                            .into(),
-                    );
-                }
-                if target == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User {
-                    return Err("Chat image content is supported only in user messages.".into());
-                }
-                image(source, metadata, target, false)?;
+                let unsupported = match (protocol, *role) {
+                    (
+                        ProviderProtocol::Messages,
+                        OrdinaryRole::System | OrdinaryRole::Developer,
+                    ) => Some(
+                        "Messages system content supports text only; images cannot be discarded.",
+                    ),
+                    (ProviderProtocol::ChatCompletion, role) if role != OrdinaryRole::User => {
+                        Some("Chat image content is supported only in user messages.")
+                    }
+                    _ => None,
+                };
+                check_position(image(source, metadata, protocol, false), unsupported)?;
             }
             Node::File {
                 source,
@@ -626,13 +734,16 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 id,
                 ..
             } => {
-                if target == ProviderProtocol::Messages
-                    && matches!(role, OrdinaryRole::System | OrdinaryRole::Developer)
-                {
-                    return Err("Messages system content supports text only; documents cannot be discarded.".into());
-                }
-                file(source, metadata, target, false)?;
-                if target != ProviderProtocol::Messages {
+                let unsupported = (protocol == ProviderProtocol::Messages
+                    && matches!(role, OrdinaryRole::System | OrdinaryRole::Developer))
+                .then_some(
+                    "Messages system content supports text only; documents cannot be discarded.",
+                );
+                check_position(
+                    file(source, metadata, protocol, false, target.openrouter_chat()),
+                    unsupported,
+                )?;
+                if protocol != ProviderProtocol::Messages {
                     if let Some(ToolResultContent::Text {
                         text, extra_body, ..
                     }) = document_prefix(metadata)
@@ -653,7 +764,7 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                     metadata.document_context = None;
                 }
                 if matches!(source, FileSource::Text { .. } | FileSource::Content { .. })
-                    && target != ProviderProtocol::Messages
+                    && protocol != ProviderProtocol::Messages
                 {
                     let expanded: Vec<Node> = expanded_document_parts(source, metadata)?
                         .into_iter()
@@ -696,8 +807,10 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                     result.extend(prepare_nodes(&expanded, target)?);
                     continue;
                 }
-                if target == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User {
-                    return Err("Chat file content is supported only in user messages.".into());
+                if protocol == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User {
+                    return Err(MediaError::capability(
+                        "Chat file content is supported only in user messages.",
+                    ));
                 }
             }
             Node::Audio {
@@ -710,48 +823,60 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
                 if matches!(source, AudioSource::Base64 { .. }) {
                     metadata.resource = None;
                 }
-                check_resource(metadata, target)?;
-                if target == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User {
-                    if *role == OrdinaryRole::Assistant
-                        && metadata.reference_id.is_some()
-                        && extra_body.contains_key(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
-                    {
-                        result.push(node);
-                        continue;
-                    }
-                    return Err(
-                        "Chat audio requires a user input or a native assistant audio reference."
-                            .into(),
-                    );
+                check_resource(metadata, protocol)?;
+                let wrong_chat_role =
+                    protocol == ProviderProtocol::ChatCompletion && *role != OrdinaryRole::User;
+                if wrong_chat_role
+                    && *role == OrdinaryRole::Assistant
+                    && metadata.reference_id.is_some()
+                    && extra_body.contains_key(CHAT_MESSAGE_AUDIO_EXTRA_KEY)
+                {
+                    result.push(node);
+                    continue;
                 }
-                if matches!(
-                    target,
+                let unsupported = if wrong_chat_role {
+                    Some("Chat audio requires a user input or a native assistant audio reference.")
+                } else if matches!(
+                    protocol,
                     ProviderProtocol::Messages | ProviderProtocol::Responses
                 ) {
-                    return Err("This target has no supported audio input carrier.".into());
-                }
+                    Some("This target has no supported audio input carrier.")
+                } else {
+                    None
+                };
                 match source {
                     AudioSource::Url { url } => {
-                        check_url(url, metadata, target)?;
-                        if target == ProviderProtocol::ChatCompletion {
-                            return Err("Chat audio input requires inline WAV or MP3 bytes.".into());
+                        check_position(check_url(url, metadata, protocol), unsupported)?;
+                        if protocol == ProviderProtocol::ChatCompletion {
+                            return Err(MediaError::capability(
+                                "Chat audio input requires inline WAV or MP3 bytes.",
+                            ));
                         }
                     }
                     AudioSource::Base64 { media_type, data } => {
                         validate_base64(data)?;
-                        if media_type == "audio/unknown" || !is_audio_mime(media_type) {
+                        let mime = mime_essence(media_type);
+                        let compat_alias =
+                            matches!(mime.as_str(), "video/audio/s16le" | "video/audio/wav");
+                        if mime == "audio/unknown"
+                            || !is_audio_mime(&mime)
+                            || (!compat_alias && media_type.parse::<mime::Mime>().is_err())
+                        {
                             return Err("Audio format is unknown. Supply the actual format before conversion.".into());
                         }
-                        if target == ProviderProtocol::ChatCompletion {
-                            *media_type = match mime_essence(media_type).as_str() {
+                        if let Some(message) = unsupported {
+                            return Err(MediaError::capability(message));
+                        }
+                        if protocol == ProviderProtocol::ChatCompletion {
+                            *media_type = match mime.as_str() {
                                 "audio/wav" | "audio/x-wav" | "video/audio/wav" => {
                                     "audio/wav".into()
                                 }
                                 "audio/mpeg" | "audio/mp3" => "audio/mpeg".into(),
                                 _ => {
-                                    return Err(
-                                        "Chat audio input supports WAV or MP3 bytes.".into()
-                                    );
+                                    return Err(MediaError::capability(
+                                        "Chat audio input supports WAV or MP3 bytes.",
+                                    ));
                                 }
                             };
                         }
@@ -770,19 +895,33 @@ pub fn prepare_nodes(nodes: &[Node], target: ProviderProtocol) -> Result<Vec<Nod
 
 pub fn prepare_request(
     request: &UrpRequest,
-    target: ProviderProtocol,
-) -> Result<UrpRequest, String> {
-    if target != ProviderProtocol::OpenaiImage
-        && request
-            .input
-            .iter()
-            .any(|node| matches!(node, Node::Image { metadata, .. } if metadata.image_markup))
-    {
-        return Err("markup-guided edits require an OpenAI Images upstream".into());
-    }
+    target: impl Into<MediaTarget>,
+) -> Result<UrpRequest, MediaError> {
+    let target = target.into();
+    validate_image_markup(&request.input, target.protocol())?;
     let mut request = request.clone();
     request.input = prepare_nodes(&request.input, target)?;
     Ok(request)
+}
+
+pub(crate) fn validate_image_markup(
+    nodes: &[Node],
+    target: ProviderProtocol,
+) -> Result<(), MediaError> {
+    if target != ProviderProtocol::OpenaiImage
+        && let Some((source, metadata)) = nodes.iter().find_map(|node| match node {
+            Node::Image {
+                source, metadata, ..
+            } if metadata.image_markup => Some((source, metadata)),
+            _ => None,
+        })
+    {
+        check_position(
+            image(&mut source.clone(), &mut metadata.clone(), target, false),
+            Some("markup-guided edits require an OpenAI Images upstream"),
+        )?;
+    }
+    Ok(())
 }
 
 fn visit_file_resources(

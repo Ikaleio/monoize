@@ -75,6 +75,8 @@ Chat 串流以 `data: [DONE]` 結束。只有請求將 `stream_options.include_u
 - 重試到其他 Channel 時，使用該 Channel 的方言。
 - 選擇 `chat_completion` 的協定覆寫規則有自己的方言。對符合該規則的模型，此值取代 Channel 方言。
 - `generic` 採用 OpenRouter 相容行為。嚴格的中繼站可能拒絕其擴充欄位。請為該 Channel 選擇其他方言。
+- 使用 `openrouter` 方言時，Monoize 會將工具結果中的圖片和檔案放入工具訊息的 `content` 陣列，保留文字和媒體項目的原有順序。使用者訊息和工具結果中的公開 HTTP(S) 檔案 URL 都會放入 `file.file_data`。
+- 其他 Chat 方言無法傳送工具結果中的圖片、未展開為文字的檔案，也不支援檔案 URL。Monoize 不會將這次請求送往上游，而是在嘗試次數限制內轉向下一個符合條件的 Channel 或 Provider。
 - Chat 用戶端保留自己使用的輸出 Token 欄位名稱，`deepseek` 除外。表格適用於其他用戶端。
 - 推理力度使用 `reasoning_effort`，包括 `none`。請求同時帶兩個欄位時，`reasoning.effort` 優先於 `reasoning_effort`。
 - 原生 Chat `reasoning` 物件只傳送給 `openrouter`、`vercel` 和 `generic` 上游。`openai` 和 `deepseek` 上游不會收到。

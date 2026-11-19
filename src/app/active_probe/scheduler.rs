@@ -1,35 +1,44 @@
 use super::*;
-use crate::monoize_routing::{MonoizeChannel, MonoizeProvider};
+use crate::handlers::channel_probe::{
+    ChannelProbeOutcome, ProbeRequestSettings, prepare_channel_probe,
+};
+use crate::monoize_routing::{
+    ChannelProbe, MonoizeChannel, MonoizeProvider, MonoizeProviderType, RecoveryMode,
+    recovery_deadline, recovery_wait, select_channel_probe_model,
+};
+use futures_util::StreamExt;
 
 /// Primary-only background loop that probes unhealthy channels and records each
 /// successful probe as a billed request log for the probe system user.
 pub(in crate::app) struct ActiveProbeScheduler {
-    pub(in crate::app) store: MonoizeRoutingStore,
-    pub(in crate::app) http_clients: HttpClients,
-    pub(in crate::app) runtime: Arc<tokio::sync::RwLock<MonoizeRuntimeConfig>>,
-    pub(in crate::app) health: Arc<Mutex<HashMap<String, ChannelHealthState>>>,
-    pub(in crate::app) routing_config_revision: Arc<AtomicU64>,
-    pub(in crate::app) user_store: UserStore,
-    pub(in crate::app) model_price_store: crate::model_price_store::ModelPriceStore,
+    pub(in crate::app) state: AppState,
     pub(in crate::app) user_id: String,
-    pub(in crate::app) shutdown: Arc<AtomicBool>,
     /// Keeps shutdown waiting until the loop has exited.
     pub(in crate::app) _task_registration: RequestLogTaskRegistration,
 }
 
-/// Per-tick snapshot shared by every channel probed in that tick.
-struct ProbeTick<'a> {
-    scheduler: &'a ActiveProbeScheduler,
-    now: i64,
-    runtime: &'a MonoizeRuntimeConfig,
-    pricing: &'a ActiveProbePricingSnapshot,
-    routing_config_revision: u64,
+struct DueKey {
+    key: String,
+    trip_id: u64,
 }
 
-enum ProbeAttemptOutcome {
-    Shutdown,
-    Skipped,
-    Completed(bool),
+struct ProbeJob<'a> {
+    due: &'a DueKey,
+    provider: &'a MonoizeProvider,
+    channel: &'a MonoizeChannel,
+    probe: ChannelProbe<'a>,
+    interval: u64,
+    success_threshold: u32,
+    timeout_ms: u64,
+    stream: bool,
+    rate_limit_wait: Option<u64>,
+}
+
+struct ProbeTick<'a> {
+    scheduler: &'a ActiveProbeScheduler,
+    pricing: &'a ActiveProbePricingSnapshot,
+    settings: &'a ProbeRequestSettings,
+    revision: u64,
 }
 
 impl ActiveProbeScheduler {
@@ -38,209 +47,243 @@ impl ActiveProbeScheduler {
     }
 
     fn shutting_down(&self) -> bool {
-        self.shutdown.load(Ordering::Acquire)
+        self.state.background_shutdown.load(Ordering::Acquire)
     }
 
     async fn run(self) {
-        'scheduler: loop {
-            if self.shutting_down() {
-                break;
-            }
+        while !self.shutting_down() {
             sleep(std::time::Duration::from_secs(1)).await;
             if self.shutting_down() {
                 break;
             }
-            let routing_config_revision = self.routing_config_revision.load(Ordering::Acquire);
-            let providers = match self.store.list_active_probe_candidates().await {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let now = chrono::Utc::now().timestamp();
-            let runtime = self.runtime.read().await.clone();
-            let pricing = match build_active_probe_pricing_snapshot(
-                &self.model_price_store,
-                &providers,
-                &runtime,
-            )
-            .await
+            self.tick().await;
+        }
+    }
+
+    async fn due_keys(&self) -> (u64, HashMap<String, Vec<DueKey>>) {
+        let health = self.state.channel_health.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        let revision = self.state.routing_config_revision.load(Ordering::Acquire);
+        let mut keys: HashMap<String, Vec<DueKey>> = HashMap::new();
+        for (key, entry) in health.iter() {
+            if !entry.is_unhealthy(now)
+                || entry.recovery_mode != Some(RecoveryMode::Probe)
+                || !entry
+                    .next_recovery_at
+                    .is_some_and(|deadline| now >= deadline)
             {
-                Ok(snapshot) => snapshot,
-                Err(err) => {
-                    tracing::warn!(error = %err, "active probe pricing snapshot failed");
-                    ActiveProbePricingSnapshot::default()
-                }
-            };
-            let tick = ProbeTick {
-                scheduler: &self,
-                now,
-                runtime: &runtime,
-                pricing: &pricing,
-                routing_config_revision,
-            };
-            for provider in &providers {
-                if self.shutting_down() {
-                    break 'scheduler;
-                }
-                if !provider.circuit_breaker_enabled {
-                    continue;
-                }
-                for channel in &provider.channels {
-                    if !tick.probe_channel(provider, channel).await {
-                        break 'scheduler;
-                    }
-                }
+                continue;
+            }
+            if let Some(trip_id) = entry.trip_id {
+                let channel_id = key.split_once("::").map_or(key.as_str(), |(id, _)| id);
+                keys.entry(channel_id.to_owned()).or_default().push(DueKey {
+                    key: key.clone(),
+                    trip_id,
+                });
             }
         }
+        (revision, keys)
+    }
+
+    async fn tick(&self) {
+        let (revision, due) = self.due_keys().await;
+        if due.is_empty() || self.shutting_down() {
+            return;
+        }
+        let providers = match self
+            .state
+            .monoize_store
+            .list_active_probe_candidates()
+            .await
+        {
+            Ok(providers) => providers,
+            Err(_) => return,
+        };
+        let (jobs, reasoning_suffix_map, settings) = {
+            let runtime = self.state.monoize_runtime.read().await;
+            let jobs = build_probe_jobs(&due, &providers, &runtime);
+            if jobs.is_empty() {
+                return;
+            }
+            (
+                jobs,
+                runtime.reasoning_suffix_map.clone(),
+                ProbeRequestSettings::from(&*runtime),
+            )
+        };
+        let pricing = match build_active_probe_pricing_snapshot(
+            &self.state.model_price_store,
+            jobs.iter().map(|job| job.probe),
+            reasoning_suffix_map,
+        )
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::warn!(error = %err, "active probe pricing snapshot failed");
+                ActiveProbePricingSnapshot::default()
+            }
+        };
+        let tick = ProbeTick {
+            scheduler: self,
+            pricing: &pricing,
+            settings: &settings,
+            revision,
+        };
+        let mut active = futures_util::stream::FuturesUnordered::new();
+        for job in jobs {
+            if active.len() == 8 {
+                let _ = active.next().await;
+            }
+            if self.shutting_down() {
+                break;
+            }
+            active.push(tick.run_job(job));
+        }
+        while active.next().await.is_some() {}
     }
 }
 
-impl ProbeTick<'_> {
-    /// Returns `false` when shutdown was observed and the scheduler must stop.
-    async fn probe_channel(&self, provider: &MonoizeProvider, channel: &MonoizeChannel) -> bool {
-        if self.scheduler.shutting_down() {
-            return false;
+fn build_probe_jobs<'a>(
+    due: &'a HashMap<String, Vec<DueKey>>,
+    providers: &'a [MonoizeProvider],
+    runtime: &MonoizeRuntimeConfig,
+) -> Vec<ProbeJob<'a>> {
+    let mut jobs = Vec::new();
+    for provider in providers {
+        for channel in &provider.channels {
+            if channel.provider_type == MonoizeProviderType::Replicate {
+                continue;
+            }
+            let Some(keys) = due.get(&channel.id) else {
+                continue;
+            };
+            for due in keys {
+                let model_key = due.key.split_once("::").map(|(_, model)| model);
+                let logical_model = match (provider.per_model_circuit_break, model_key) {
+                    (true, Some(model)) => Some(model),
+                    (false, None) => select_channel_probe_model(
+                        provider,
+                        channel,
+                        runtime.active_probe_model.as_deref(),
+                    ),
+                    _ => None,
+                };
+                let Some(probe) = logical_model
+                    .and_then(|model| ChannelProbe::for_model(provider, channel, model))
+                else {
+                    continue;
+                };
+                if probe.provider_type == MonoizeProviderType::Replicate {
+                    continue;
+                }
+                jobs.push(ProbeJob {
+                    due,
+                    provider,
+                    channel,
+                    probe,
+                    interval: runtime.probe_interval(provider, channel),
+                    timeout_ms: runtime.request_timeout(provider),
+                    stream: probe.is_completion() && runtime.probe_stream(provider, channel),
+                    success_threshold: channel
+                        .active_probe_success_threshold_override
+                        .or(provider.active_probe_success_threshold_override)
+                        .unwrap_or(runtime.active_success_threshold)
+                        .max(1),
+                    rate_limit_wait: runtime.rate_limit_wait(provider, channel),
+                });
+            }
         }
-        if channel.provider_type == crate::monoize_routing::MonoizeProviderType::Replicate {
-            return true;
-        }
-        let active_enabled = channel
-            .active_probe_enabled_override
-            .or(provider.active_probe_enabled_override)
-            .unwrap_or(self.runtime.active_enabled);
-        if !active_enabled {
-            return true;
-        }
-        let probe_interval_seconds = channel
-            .active_probe_interval_seconds_override
-            .or(provider.active_probe_interval_seconds_override)
-            .unwrap_or(self.runtime.active_interval_seconds)
-            .max(1);
-        let probe_success_threshold = channel
-            .active_probe_success_threshold_override
-            .or(provider.active_probe_success_threshold_override)
-            .unwrap_or(self.runtime.active_success_threshold)
-            .max(1);
-        let Some(model_name) = self
-            .select_model(provider, channel, probe_interval_seconds)
-            .await
-        else {
-            return true;
-        };
-        if !channel.models.contains_key(&model_name) {
-            return true;
-        }
+    }
+    jobs
+}
 
-        let probe_http = match self
+fn log_probe_result(
+    provider: &MonoizeProvider,
+    channel: &MonoizeChannel,
+    model: &str,
+    success: bool,
+) {
+    tracing::debug!(channel_id = %channel.id, provider = %provider.name, probe_model = %model, success, "active health probe result");
+}
+
+impl ProbeTick<'_> {
+    async fn run_job(&self, job: ProbeJob<'_>) {
+        if self.scheduler.shutting_down() {
+            return;
+        }
+        let http = match self
             .scheduler
+            .state
             .http_clients
-            .for_channel_proxy(channel.proxy_url.as_deref())
+            .for_channel_proxy(job.channel.proxy_url.as_deref())
         {
             Ok(client) => client,
             Err(error) => {
-                tracing::warn!(
-                    channel_id = %channel.id,
-                    channel_name = %channel.name,
-                    provider = %provider.name,
-                    error = %error,
-                    "active probe skipped because channel proxy could not be built"
-                );
-                return true;
+                tracing::warn!(channel_id = %job.channel.id, %error, "active probe skipped because channel proxy could not be built");
+                return;
             }
         };
-
-        let upstream_model = channel
-            .models
-            .get(&model_name)
-            .and_then(|entry| entry.redirect.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&model_name)
-            .to_string();
-        if self.scheduler.shutting_down() {
-            return false;
-        }
-        let ok = match self
-            .execute_probe(provider, channel, &model_name, &upstream_model, &probe_http)
-            .await
-        {
-            ProbeAttemptOutcome::Shutdown => return false,
-            ProbeAttemptOutcome::Skipped => return true,
-            ProbeAttemptOutcome::Completed(ok) => ok,
+        let Some(outcome) = self.execute_probe(&job, &http).await else {
+            return;
         };
-        tracing::debug!(
-            channel_id = %channel.id,
-            channel_name = %channel.name,
-            provider = %provider.name,
-            probe_model = ?Some(&model_name),
-            probe_interval_seconds,
-            probe_success_threshold,
-            success = ok,
-            "active health probe result"
-        );
-        self.update_health(provider, channel, &model_name, ok, probe_success_threshold)
-            .await;
-        true
+        self.update_health(&job, &outcome).await;
     }
 
-    /// Per-model breakers probe the configured model when it is due, else the first
-    /// due model; channel breakers probe the configured or first model when the
-    /// channel itself is due.
-    async fn select_model(
-        &self,
-        provider: &MonoizeProvider,
-        channel: &MonoizeChannel,
-        probe_interval_seconds: u64,
-    ) -> Option<String> {
-        let now = self.now;
-        let configured_model = channel
-            .active_probe_model_override
-            .clone()
-            .or(provider.active_probe_model_override.clone())
-            .or(self.runtime.active_probe_model.clone());
-        let is_due = |state: &ChannelHealthState| {
-            !state.healthy
-                && state.cooldown_until.is_none_or(|until| now >= until)
-                && state.last_probe_at.is_none_or(|last_probe_at| {
-                    now.saturating_sub(last_probe_at) >= probe_interval_seconds as i64
-                })
-        };
-        let guard = self.scheduler.health.lock().await;
-        if provider.per_model_circuit_break {
-            let mut due_models: Vec<String> = channel
-                .models
-                .keys()
-                .filter(|model| {
-                    guard
-                        .get(&health_key(&channel.id, Some(model)))
-                        .is_some_and(is_due)
-                })
-                .cloned()
-                .collect();
-            due_models.sort();
-            configured_model
-                .filter(|model| due_models.contains(model))
-                .or_else(|| due_models.into_iter().next())
-        } else {
-            let probe_due = guard
-                .get(&health_key(&channel.id, None))
-                .is_some_and(is_due);
-            probe_due
-                .then(|| configured_model.or_else(|| channel.models.keys().min().cloned()))
-                .flatten()
-        }
+    fn current_trip(entry: &ChannelHealthState, due: &DueKey, now: i64) -> bool {
+        entry.trip_id == Some(due.trip_id) && entry.is_unhealthy(now)
+    }
+
+    async fn can_dispatch(&self, due: &DueKey) -> bool {
+        let health = self.scheduler.state.channel_health.lock().await;
+        self.scheduler
+            .state
+            .routing_config_revision
+            .load(Ordering::Acquire)
+            == self.revision
+            && health
+                .get(&due.key)
+                .is_some_and(|entry| Self::current_trip(entry, due, chrono::Utc::now().timestamp()))
     }
 
     /// Reserves and arms the terminal request log, runs the probe, then cancels the
     /// reservation on failure or settles it on success.
     async fn execute_probe(
         &self,
-        provider: &MonoizeProvider,
-        channel: &MonoizeChannel,
-        model_name: &str,
-        upstream_model: &str,
+        job: &ProbeJob<'_>,
         probe_http: &reqwest::Client,
-    ) -> ProbeAttemptOutcome {
-        let user_store = &self.scheduler.user_store;
+    ) -> Option<ChannelProbeOutcome> {
+        let ProbeJob {
+            provider,
+            channel,
+            probe,
+            ..
+        } = job;
+        let model_name = probe.logical_model;
+        if !self.can_dispatch(job.due).await || self.scheduler.shutting_down() {
+            return None;
+        }
+        let prepared = match prepare_channel_probe(
+            &self.scheduler.state,
+            probe_http,
+            provider,
+            channel,
+            *probe,
+            self.settings,
+            job.stream,
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                log_probe_result(provider, channel, model_name, false);
+                return Some(error.into_outcome());
+            }
+        };
+        if self.scheduler.shutting_down() {
+            return None;
+        }
+        let user_store = &self.scheduler.state.user_store;
         let request_log_reservation = match user_store.reserve_terminal_request_log() {
             Ok(reservation) => reservation,
             Err(error) => {
@@ -251,21 +294,26 @@ impl ProbeTick<'_> {
                     probe_model = %model_name,
                     "active probe skipped because request-log spool admission failed: {error}"
                 );
-                return ProbeAttemptOutcome::Skipped;
+                return None;
             }
         };
         let request_id = uuid::Uuid::new_v4().to_string();
+        let transformed_model = prepared
+            .upstream_model()
+            .filter(|model| *model != probe.upstream_model)
+            .map(str::to_owned);
         let log_context = ActiveProbeLogContext {
             request_id: &request_id,
             user_id: &self.scheduler.user_id,
             provider_id: &provider.id,
             provider_name: &provider.name,
-            provider_type: channel.provider_type,
-            channel_multiplier: channel.models.get(model_name).map(|entry| entry.multiplier),
+            provider_type: probe.provider_type,
+            channel_multiplier: Some(probe.multiplier),
             channel_id: &channel.id,
             channel_name: &channel.name,
             logical_model: model_name,
-            upstream_model,
+            upstream_model: transformed_model.as_deref().unwrap_or(probe.upstream_model),
+            is_stream: prepared.is_stream(),
             created_at: chrono::Utc::now(),
         };
         if let Err(error) = user_store
@@ -282,9 +330,9 @@ impl ProbeTick<'_> {
                 probe_model = %model_name,
                 "active probe skipped because request-log fallback could not be armed: {error}"
             );
-            return ProbeAttemptOutcome::Skipped;
+            return None;
         }
-        if self.scheduler.shutting_down() {
+        if !self.can_dispatch(job.due).await || self.scheduler.shutting_down() {
             if let Err(error) = user_store
                 .cancel_terminal_request_log(&request_log_reservation)
                 .await
@@ -297,19 +345,11 @@ impl ProbeTick<'_> {
                     "active probe request-log reservation cancellation failed: {error}"
                 );
             }
-            return ProbeAttemptOutcome::Shutdown;
+            return None;
         }
         let started_at = std::time::Instant::now();
-        let outcome = probe_channel_completion(
-            probe_http,
-            channel,
-            self.runtime.request_timeout_ms,
-            upstream_model,
-            channel.provider_type,
-            &provider.api_type_overrides,
-            false,
-        )
-        .await;
+        let mut outcome = prepared.send(job.timeout_ms).await;
+        log_probe_result(provider, channel, model_name, outcome.ok);
         if !outcome.ok {
             if let Err(error) = user_store
                 .cancel_terminal_request_log(&request_log_reservation)
@@ -322,15 +362,15 @@ impl ProbeTick<'_> {
                     probe_model = %model_name,
                     "failed active probe request-log reservation cancellation failed: {error}"
                 );
-                return ProbeAttemptOutcome::Skipped;
+                return None;
             }
-            return ProbeAttemptOutcome::Completed(false);
+            return Some(outcome);
         }
         if let Err(error) = persist_active_probe_request_log(
             user_store,
             log_context,
-            self.pricing.resolve(upstream_model, model_name),
-            outcome.usage,
+            self.pricing.resolve(probe.upstream_model, model_name),
+            outcome.usage.take(),
             started_at.elapsed().as_millis() as u64,
             request_log_reservation,
         )
@@ -343,57 +383,47 @@ impl ProbeTick<'_> {
                 probe_model = %model_name,
                 "active probe request log could not be durably enqueued: {error}"
             );
-            return ProbeAttemptOutcome::Skipped;
+            return None;
         }
-        ProbeAttemptOutcome::Completed(true)
+        Some(outcome)
     }
 
-    /// Results computed against a routing config that changed mid-tick are dropped.
-    async fn update_health(
-        &self,
-        provider: &MonoizeProvider,
-        channel: &MonoizeChannel,
-        model_name: &str,
-        ok: bool,
-        probe_success_threshold: u32,
-    ) {
-        let now = self.now;
-        let mut guard = self.scheduler.health.lock().await;
+    async fn update_health(&self, job: &ProbeJob<'_>, outcome: &ChannelProbeOutcome) {
+        let mut health = self.scheduler.state.channel_health.lock().await;
+        // Revision advancement and the trip check share the health lock with the write.
         if self
             .scheduler
+            .state
             .routing_config_revision
             .load(Ordering::Acquire)
-            != self.routing_config_revision
+            != self.revision
         {
             return;
         }
-        let state = if provider.per_model_circuit_break {
-            match guard.get_mut(&health_key(&channel.id, Some(model_name))) {
-                Some(state) => state,
-                None => return,
-            }
-        } else {
-            let key = health_key(&channel.id, None);
-            if !crate::monoize_routing::prepare_channel_health_insert(&mut guard, &key) {
+        let Some(entry) = health.get_mut(&job.due.key) else {
+            return;
+        };
+        let now = chrono::Utc::now().timestamp();
+        if !Self::current_trip(entry, job.due, now) {
+            return;
+        }
+        let wait = if outcome.ok {
+            entry.probe_success_count = entry.probe_success_count.saturating_add(1);
+            if entry.probe_success_count >= job.success_threshold {
+                entry.mark_success(now);
                 return;
             }
-            guard.entry(key).or_insert_with(ChannelHealthState::new)
-        };
-        if ok {
-            state.last_probe_at = Some(now);
-            state.probe_success_count = state.probe_success_count.saturating_add(1);
-            if state.probe_success_count >= probe_success_threshold {
-                clear_channel_health_state(state, now);
-            }
+            job.interval
         } else {
-            let cooldown_seconds = channel
-                .passive_cooldown_seconds_override
-                .unwrap_or(self.runtime.passive_cooldown_seconds)
-                .max(1);
-            state.healthy = false;
-            state.probe_success_count = 0;
-            state.last_probe_at = Some(now);
-            state.cooldown_until = Some(now + cooldown_seconds as i64);
-        }
+            entry.probe_success_count = 0;
+            recovery_wait(
+                job.interval,
+                job.rate_limit_wait,
+                outcome.rate_limited,
+                outcome.retry_after_seconds,
+            )
+        };
+        entry.last_probe_at = Some(now);
+        entry.next_recovery_at = Some(recovery_deadline(now, wait));
     }
 }

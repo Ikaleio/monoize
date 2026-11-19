@@ -23,7 +23,7 @@ pub(super) fn encode_messages(nodes: &[Node], dialect: ChatDialect) -> Vec<Value
                 role, nodes, extra, ..
             } => encode_message_envelope(role, nodes, &extra, dialect, &mut out),
             Envelope::ToolResult { node, extra } => {
-                if let Some(message) = encode_tool_result_message(node, &extra) {
+                if let Some(message) = encode_tool_result_message(node, &extra, dialect) {
                     out.push(message);
                 }
             }
@@ -66,7 +66,7 @@ fn encode_message_envelope<'a>(
         }
         pending
             .get_or_insert_with(|| PendingChatMessage::new(role, extra.clone()))
-            .push(node);
+            .push(node, dialect);
     }
     if let Some(message) = pending {
         message.flush(dialect, out);
@@ -96,7 +96,7 @@ impl<'a> PendingChatMessage<'a> {
         }
     }
 
-    fn push(&mut self, node: &'a Node) {
+    fn push(&mut self, node: &'a Node, dialect: ChatDialect) {
         match node {
             Node::Audio {
                 metadata,
@@ -154,7 +154,7 @@ impl<'a> PendingChatMessage<'a> {
                 source,
                 extra_body,
                 ..
-            } => self.push_content(encode_file_part(metadata, source, extra_body)),
+            } => self.push_content(encode_file_part(metadata, source, extra_body, dialect)),
             Node::Audio {
                 source, extra_body, ..
             } => self.push_content(encode_audio_part(source, extra_body)),
@@ -308,6 +308,7 @@ fn encode_file_part(
     metadata: &MediaMetadata,
     source: &FileSource,
     extra_body: &HashMap<String, Value>,
+    dialect: ChatDialect,
 ) -> Option<Value> {
     let mut file = match source {
         FileSource::FileId { file_id }
@@ -317,6 +318,9 @@ fn encode_file_part(
         }
         FileSource::Base64 { media_type, data } => {
             json!({ "file_data": format!("data:{media_type};base64,{data}") })
+        }
+        FileSource::Url { url } if dialect == ChatDialect::OpenRouter => {
+            json!({ "file_data": url })
         }
         FileSource::Url { .. }
         | FileSource::FileId { .. }
@@ -366,7 +370,11 @@ fn encode_audio_part(source: &AudioSource, extra_body: &HashMap<String, Value>) 
 }
 
 /// A `role = "tool"` message, or `role = "function"` for a deprecated function result (PC2.9).
-fn encode_tool_result_message(node: &Node, extra: &HashMap<String, Value>) -> Option<Value> {
+fn encode_tool_result_message(
+    node: &Node,
+    extra: &HashMap<String, Value>,
+    dialect: ChatDialect,
+) -> Option<Value> {
     let Node::ToolResult {
         id,
         call_id,
@@ -379,7 +387,7 @@ fn encode_tool_result_message(node: &Node, extra: &HashMap<String, Value>) -> Op
     else {
         return None;
     };
-    let content = encode_tool_result_content(content, *is_error);
+    let content = encode_tool_result_content(content, *is_error, dialect);
     let mut m = Map::new();
     if extra_body.contains_key(CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY)
         || extra.contains_key(CHAT_LEGACY_FUNCTION_RESULT_EXTRA_KEY)
@@ -396,6 +404,7 @@ fn encode_tool_result_message(node: &Node, extra: &HashMap<String, Value>) -> Op
     merge_chat_wire_extra(&mut m, extra);
     m.remove("id");
     m.remove("name");
+    m.remove("is_error");
     if let Some(id) = id {
         m.insert("id".to_string(), Value::String(id.clone()));
     }
@@ -405,40 +414,51 @@ fn encode_tool_result_message(node: &Node, extra: &HashMap<String, Value>) -> Op
     Some(Value::Object(m))
 }
 
-/// PC2.10: Chat tool messages accept a string or an array of text parts and have no error flag.
-fn encode_tool_result_content(content: &[ToolResultContent], is_error: bool) -> Value {
-    let mut entries = content
-        .iter()
-        .filter_map(|content| match content {
+/// PC2.10: OpenRouter supports media parts; only a lone plain text part can collapse to a string.
+fn encode_tool_result_content(
+    content: &[ToolResultContent],
+    is_error: bool,
+    dialect: ChatDialect,
+) -> Value {
+    let mut parts = Vec::with_capacity(content.len());
+    let mut needs_prefix = is_error;
+    for entry in content {
+        let part = match entry {
             ToolResultContent::Text {
                 text, extra_body, ..
-            } => Some((text.clone(), extra_body)),
+            } => {
+                let text = if std::mem::take(&mut needs_prefix) {
+                    format!("Error: {text}")
+                } else {
+                    text.clone()
+                };
+                let mut part = Map::from_iter([
+                    ("type".to_owned(), json!("text")),
+                    ("text".to_owned(), Value::String(text)),
+                ]);
+                merge_chat_wire_extra(&mut part, extra_body);
+                Some(Value::Object(part))
+            }
+            ToolResultContent::Image {
+                source,
+                metadata,
+                extra_body,
+            } if dialect == ChatDialect::OpenRouter => {
+                encode_image_part(metadata, source, extra_body)
+            }
+            ToolResultContent::File {
+                source,
+                metadata,
+                extra_body,
+            } if dialect == ChatDialect::OpenRouter => {
+                encode_file_part(metadata, source, extra_body, dialect)
+            }
             _ => None,
-        })
-        .collect::<Vec<_>>();
-    let no_extra = HashMap::new();
-    if is_error {
-        match entries.first_mut() {
-            Some((first, _)) => first.insert_str(0, "Error: "),
-            None => entries.push(("Error".to_string(), &no_extra)),
-        }
+        };
+        parts.extend(part);
     }
-    if entries.is_empty() {
-        return Value::String(String::new());
+    if needs_prefix {
+        parts.insert(0, json!({"type": "text", "text": "Error"}));
     }
-    let mut parts = entries
-        .into_iter()
-        .map(|(text, extra_body)| {
-            let mut part = Map::from_iter([
-                ("type".to_string(), json!("text")),
-                ("text".to_string(), Value::String(text)),
-            ]);
-            merge_chat_wire_extra(&mut part, extra_body);
-            part
-        })
-        .collect::<Vec<_>>();
-    if parts.len() == 1 && parts[0].len() == 2 {
-        return parts.remove(0).remove("text").unwrap_or_default();
-    }
-    Value::Array(parts.into_iter().map(Value::Object).collect())
+    message_content(parts)
 }

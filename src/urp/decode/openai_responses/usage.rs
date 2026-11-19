@@ -1,4 +1,6 @@
-use crate::urp::decode::{deserialize_u64ish_default, retain_wire_extra_fields, split_extra};
+use crate::urp::decode::{
+    deserialize_u64ish_default, deserialize_u64ish_optional, retain_wire_extra_fields, split_extra,
+};
 use crate::urp::{InputDetails, OutputDetails, Usage};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -8,16 +10,16 @@ use std::collections::HashMap;
 struct OpenAiResponsesUsage {
     #[serde(
         default,
-        deserialize_with = "deserialize_u64ish_default",
+        deserialize_with = "deserialize_u64ish_optional",
         alias = "prompt_tokens"
     )]
-    input_tokens: u64,
+    input_tokens: Option<u64>,
     #[serde(
         default,
-        deserialize_with = "deserialize_u64ish_default",
+        deserialize_with = "deserialize_u64ish_optional",
         alias = "completion_tokens"
     )]
-    output_tokens: u64,
+    output_tokens: Option<u64>,
     #[serde(default)]
     input_tokens_details: Option<OpenAiResponsesInputDetails>,
     #[serde(default)]
@@ -193,8 +195,9 @@ impl From<OpenAiResponsesUsage> for Usage {
 
         Usage {
             iterations: None,
-            input_tokens,
-            output_tokens,
+            reported_token_counts: input_tokens.is_some() && output_tokens.is_some(),
+            input_tokens: input_tokens.unwrap_or(0),
+            output_tokens: output_tokens.unwrap_or(0),
             input_details,
             output_details,
             extra_body: extra,
@@ -217,6 +220,7 @@ pub(crate) fn parse_usage_from_responses(obj: &Map<String, Value>) -> Usage {
         .map(Usage::from)
         .unwrap_or_else(|_| Usage {
             iterations: None,
+            reported_token_counts: false,
             input_tokens: 0,
             output_tokens: 0,
             input_details: None,

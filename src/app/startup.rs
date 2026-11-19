@@ -123,23 +123,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         .with_db(db.clone())
         .with_runtime(monoize_runtime.clone());
     request_capture.spawn_cleanup_task();
-    // PRP11: replicas never run the active-probe scheduler.
-    if let Some(user_id) = active_probe_user_id {
-        ActiveProbeScheduler {
-            store: monoize_store.clone(),
-            http_clients: http_clients.clone(),
-            runtime: monoize_runtime.clone(),
-            health: channel_health.clone(),
-            routing_config_revision: routing_config_revision.clone(),
-            user_store: user_store.clone(),
-            model_price_store: model_price_store.clone(),
-            user_id,
-            shutdown: background_shutdown.clone(),
-            _task_registration: RequestLogTaskRegistration::new(request_log_tasks.clone()),
-        }
-        .spawn();
-    }
-
     let node = Arc::new(runtime.node.clone());
     let started_at = chrono::Utc::now();
     let metering = initialize_metering(&runtime, &db, &user_store, started_at, is_replica).await?;
@@ -154,7 +137,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         None
     };
 
-    Ok(AppState {
+    let state = AppState {
         runtime: Arc::new(runtime),
         started_at,
         auth,
@@ -190,7 +173,17 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         image_transform_cache,
         request_capture,
         trusted_proxies,
-    })
+    };
+    // PRP11: replicas never run the active-probe scheduler.
+    if let Some(user_id) = active_probe_user_id {
+        ActiveProbeScheduler {
+            state: state.clone(),
+            user_id,
+            _task_registration: RequestLogTaskRegistration::new(state.request_log_tasks.clone()),
+        }
+        .spawn();
+    }
+    Ok(state)
 }
 
 /// A process can install only one global recorder, so every `load_state_with_runtime`

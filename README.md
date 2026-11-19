@@ -49,7 +49,7 @@ A logical model can match several ordered Providers. Each Provider contains weig
 4. When the current route is exhausted, advance to the next route.
 5. Stop fallback after sending the first response byte.
 
-HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, and connection errors can retry the same Channel within the retry limits. Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, do not retry the same Channel. They still advance to the next eligible Channel or Provider. Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, and internal errors stop routing. Circuit breakers, passive health checks, active probes, and cooldowns exclude unhealthy Channels from the path. Monoize never switches Providers in the middle of a visible stream. See the [routing specification](spec/monoize-upstream-routing.spec.md).
+HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, and connection errors can retry the same Channel within the retry limits. Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, do not retry the same Channel. They still advance to the next eligible Channel or Provider. If the selected upstream protocol cannot represent the request's media, Monoize also advances to the next eligible Channel or Provider. Other request-validation and request-encoding errors stop routing. Monoize authentication, authorization, balance, transform, billing, and internal errors also stop routing. An enabled circuit breaker excludes unhealthy Channels until they recover. The primary uses automatic probes for non-Replicate Channels. Replicate Channels and all Channels on replicas use timed recovery. Monoize never switches Providers in the middle of a visible stream. See the [routing specification](spec/monoize-upstream-routing.spec.md).
 
 ### 3. Low forwarding overhead
 
@@ -63,7 +63,7 @@ Some response transforms rebuild the full response and use a buffered synthetic 
 
 **Protocol conversion.** Streaming and non-streaming conversion among Responses, Chat Completions, and Messages. Gemini, OpenAI image APIs, and Replicate connect as upstreams.
 
-**Routing.** Ordered Provider fallback, weighted Channels, circuit breakers and active probes, Channel affinity, and per-API-key model redirects.
+**Routing.** Ordered Provider fallback, weighted Channels, circuit breakers with probe or timed recovery, Channel affinity, and per-API-key model redirects.
 
 **Boundary transforms**, attached at global, Provider, or API-key scope and matched by model glob:
 

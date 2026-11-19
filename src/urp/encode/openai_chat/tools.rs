@@ -73,10 +73,11 @@ pub(super) fn encode_tools(
             if !matches!(dialect, ChatDialect::OpenRouter | ChatDialect::Generic) {
                 return Err(ChatEncodeError {
                     code: "unsupported_tool",
-                    message: format!(
+                    error: format!(
                         "tool type `{}` is not available on this Chat Completions upstream",
                         tool.tool_type
-                    ),
+                    )
+                    .into(),
                 });
             }
             let mut obj = Map::new();
@@ -105,10 +106,11 @@ pub(super) fn encode_tools(
         } else {
             return Err(ChatEncodeError {
                 code: "unsupported_tool",
-                message: format!(
+                error: format!(
                     "tool type `{}` cannot be encoded for a Chat Completions upstream",
                     tool.tool_type
-                ),
+                )
+                .into(),
             });
         }
     }

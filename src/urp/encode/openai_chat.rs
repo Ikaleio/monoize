@@ -66,7 +66,7 @@ impl ChatDialect {
 #[derive(Debug, Clone)]
 pub struct ChatEncodeError {
     pub code: &'static str,
-    pub message: String,
+    pub error: crate::urp::media::MediaError,
 }
 
 /// DC7b: the Chat completion id for both modes; generated only when the URP id is empty.

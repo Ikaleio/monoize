@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 pub fn encode_request(req: &UrpRequest, upstream_model: &str, dialect: ChatDialect) -> Value {
     encode_request_checked(req, upstream_model, dialect)
-        .unwrap_or_else(|error| crate::urp::media::error_body(&error.message))
+        .unwrap_or_else(|error| crate::urp::media::error_body(error.error.message()))
 }
 
 pub fn encode_request_checked(
@@ -21,11 +21,12 @@ pub fn encode_request_checked(
     upstream_model: &str,
     dialect: ChatDialect,
 ) -> Result<Value, ChatEncodeError> {
-    let mut prepared = crate::urp::media::prepare_request(req, ProviderProtocol::ChatCompletion)
-        .map_err(|message| ChatEncodeError {
-            code: "unsupported_media",
-            message,
-        })?;
+    let mut prepared =
+        crate::urp::media::prepare_request(req, crate::urp::media::MediaTarget::Chat(dialect))
+            .map_err(|error| ChatEncodeError {
+                code: "unsupported_media",
+                error,
+            })?;
     crate::urp::cache_breakpoint::materialize_wire_markers(
         &mut prepared,
         crate::urp::cache_breakpoint::CacheWireTarget::Chat(dialect),

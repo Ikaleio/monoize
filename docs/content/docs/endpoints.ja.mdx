@@ -75,6 +75,8 @@ Chat ストリームは `data: [DONE]` で終わります。Monoize が使用量
 - 別の Channel へのリトライでは、その Channel のダイアレクトを使います。
 - `chat_completion` を選択するプロトコルの上書きルールは、独自のダイアレクトを持ちます。ルールに一致するモデルでは、この値が Channel のダイアレクトより優先されます。
 - `generic` は OpenRouter 互換の動作をします。厳格なリレーは拡張フィールドを拒否する場合があります。その Channel には別のダイアレクトを選択してください。
+- `openrouter` では、ツール結果の画像やファイルをツールメッセージの `content` 配列に含めます。テキストやメディアの並び順は変わりません。ユーザーメッセージとツール結果のどちらでも、公開 HTTP(S) ファイル URL は `file.file_data` に入ります。
+- 他の Chat ダイアレクトでは、ツール結果の画像やテキストに展開されなかったファイルは送れません。ファイル URL にも対応していません。Monoize はその試行でリクエストを上流に送らず、試行回数の上限内で次の条件を満たす Channel または Provider を試します。
 - Chat クライアントは自身の出力トークンフィールド名を維持します（`deepseek` を除く）。表はその他のクライアントに適用されます。
 - 推論の強度は `reasoning_effort` で送ります（`none` を含む）。両方のフィールドがある場合、`reasoning.effort` が `reasoning_effort` より優先されます。
 - ネイティブの Chat `reasoning` オブジェクトは `openrouter`、`vercel`、`generic` の上流にのみ届きます。`openai` と `deepseek` の上流には送りません。

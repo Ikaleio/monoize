@@ -179,6 +179,7 @@ impl StreamForward {
         let downstream = self.request.downstream;
         let mut upstream_body = match encode_request_for_provider(&mut req, attempt, downstream) {
             Ok(body) => body,
+            Err(err) if err.target_capability => return Err(err),
             Err(err) => return Err(self.fail_request(attempt, err)),
         };
         enforce_ws_encrypted_include(
@@ -326,6 +327,7 @@ impl StreamForward {
         .await
         {
             Ok(stream_call) => stream_call,
+            Err(err) if err.target_capability => return Err(err),
             Err(err) => return Err(self.fail_request(attempt, err)),
         };
         Ok(LiveDispatch {
@@ -357,7 +359,7 @@ impl StreamForward {
         let downstream = self.request.downstream;
         // FP4h: an HTTP attempt is accepted by its 2xx headers; a WebSocket
         // attempt only by its first non-control frame.
-        if let StreamUpstreamSource::Http(upstream_resp) = &source {
+        let retry_after_seconds = if let StreamUpstreamSource::Http(upstream_resp) = &source {
             self.request
                 .commit
                 .accept(if downstream.is_same_family(attempt.provider_type) {
@@ -365,7 +367,10 @@ impl StreamForward {
                 } else {
                     Vec::new()
                 });
-        }
+            upstream::parse_retry_after(upstream_resp.headers(), now_ts())
+        } else {
+            None
+        };
         // XTRA-5b: request-envelope members never cross families.
         let pending_request_envelope_extra = self
             .request
@@ -395,6 +400,7 @@ impl StreamForward {
             decode_handle,
             &runtime_metrics,
             &self.request.commit,
+            retry_after_seconds,
         )
         .await
         {

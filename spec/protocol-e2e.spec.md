@@ -62,11 +62,12 @@ Builds MUST forward configured HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment
 as Docker build arguments. Lowercase aliases are accepted. For loopback proxy hosts, builds MUST use the corresponding daemon proxy when configured,
 otherwise map the host to host.docker.internal. These settings MUST NOT become runtime image settings.
 
-E2E-9. Initialize the empty database with Monoize migrations, stop Monoize, disable CAPTCHA,
-automatic price sync, and active probes in that database, and restart it. Register the first
+E2E-9. Initialize the empty database with Monoize migrations, stop Monoize, disable CAPTCHA
+and automatic price sync in that database, and restart it. Register the first
 administrator through the Dashboard API. Through that API, set unlimited test balance,
 zero test model prices, one Provider, one Channel, and one capture-enabled API key.
-Disable Provider retries, Channel retries, active probes, and additional routing.
+Disable Provider retries, Channel retries, and additional routing. Set the seeded Provider's
+`circuit_breaker_enabled = false` to prevent scheduler probes.
 Use `e2e-model` as the only downstream model and redirect it to the configured model.
 Constrain auxiliary model settings to this alias and disable optional background client work.
 Claude MUST disable optional adaptive thinking and set its thinking budget to zero.

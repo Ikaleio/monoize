@@ -37,6 +37,7 @@ pub struct UpstreamCallError {
     pub message: String,
     pub source: UpstreamErrorSource,
     pub forwarded_headers: Box<[(axum::http::HeaderName, axum::http::HeaderValue)]>,
+    pub retry_after_seconds: Option<u16>,
 }
 
 impl UpstreamCallError {
@@ -58,6 +59,7 @@ impl UpstreamCallError {
             message,
             source,
             forwarded_headers: Box::default(),
+            retry_after_seconds: None,
         }
     }
 
@@ -249,7 +251,7 @@ pub async fn call_upstream_multipart_with_timeout_and_headers(
     .await
 }
 
-fn json_request(
+pub(crate) fn json_request(
     client: &reqwest::Client,
     provider: &ProviderConfig,
     auth_value: &str,
@@ -313,10 +315,7 @@ fn authorize(
 
 /// Sends `req` and returns the response when its status is 2xx.
 async fn exchange(req: reqwest::RequestBuilder) -> Result<reqwest::Response, UpstreamCallError> {
-    let resp = req
-        .send()
-        .await
-        .map_err(|err| transport_error(None, &err))?;
+    let resp = send_request(req).await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(non_success_upstream_error(resp, status).await);
@@ -324,7 +323,13 @@ async fn exchange(req: reqwest::RequestBuilder) -> Result<reqwest::Response, Ups
     Ok(resp)
 }
 
-async fn read_json_body(resp: reqwest::Response) -> Result<Value, UpstreamCallError> {
+pub(crate) async fn send_request(
+    req: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, UpstreamCallError> {
+    req.send().await.map_err(|err| transport_error(None, &err))
+}
+
+pub(crate) async fn read_json_body(resp: reqwest::Response) -> Result<Value, UpstreamCallError> {
     let status = resp.status();
     if let Some(payload) = crate::payload::current() {
         use futures_util::TryStreamExt as _;
@@ -380,18 +385,8 @@ async fn non_success_upstream_error(
     status: StatusCode,
 ) -> UpstreamCallError {
     let forwarded_headers = forwarded_response_headers(resp.headers());
-    let mut chunks = resp.bytes_stream();
-    use futures_util::StreamExt as _;
-    let mut text = Vec::new();
-    const ERROR_MAX: usize = 64 * 1024;
-    while let Some(Ok(chunk)) = chunks.next().await {
-        let take = chunk.len().min(ERROR_MAX - text.len());
-        text.extend_from_slice(&chunk[..take]);
-        if text.len() == ERROR_MAX {
-            break;
-        }
-    }
-    let text = String::from_utf8_lossy(&text).into_owned();
+    let retry_after_seconds = parse_retry_after(resp.headers(), chrono::Utc::now().timestamp());
+    let text = read_http_error_body(resp).await;
     let info = extract_error_info(&text);
     let (message, source) = match info.message.clone() {
         Some(message) => (message, UpstreamErrorSource::StructuredBody),
@@ -405,7 +400,80 @@ async fn non_success_upstream_error(
         .with_error_info(info)
         .with_source(source);
     err.forwarded_headers = forwarded_headers.into_boxed_slice();
+    err.retry_after_seconds = retry_after_seconds;
     err
+}
+
+pub(crate) async fn read_http_error_body(resp: reqwest::Response) -> String {
+    let mut chunks = resp.bytes_stream();
+    use futures_util::StreamExt as _;
+    let mut text = Vec::new();
+    const ERROR_MAX: usize = 64 * 1024;
+    while let Some(Ok(chunk)) = chunks.next().await {
+        let take = chunk.len().min(ERROR_MAX - text.len());
+        text.extend_from_slice(&chunk[..take]);
+        if text.len() == ERROR_MAX {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&text).into_owned()
+}
+
+pub(crate) fn parse_retry_after(headers: &axum::http::HeaderMap, now: i64) -> Option<u16> {
+    const MAX_SECONDS: u64 = 3600;
+
+    fn integer(value: &str) -> Option<u64> {
+        (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| value.parse().unwrap_or(u64::MAX))
+    }
+
+    let header = |name: &str| headers.get(name)?.to_str().ok().map(str::trim);
+    if let Some(ms) = header("retry-after-ms").and_then(integer) {
+        return Some(ms.div_ceil(1000).min(MAX_SECONDS) as u16);
+    }
+    let value = header("retry-after")?;
+    if let Some(seconds) = integer(value) {
+        return Some(seconds.min(MAX_SECONDS) as u16);
+    }
+    let date = parse_http_date(value, now)?;
+    Some(
+        date.and_utc()
+            .timestamp()
+            .saturating_sub(now)
+            .clamp(0, MAX_SECONDS as i64) as u16,
+    )
+}
+
+fn parse_http_date(value: &str, now: i64) -> Option<chrono::NaiveDateTime> {
+    use chrono::format::{Parsed, StrftimeItems, parse};
+    use chrono::{DateTime, Datelike, Months, NaiveDateTime};
+
+    if let Some(date) = ["%a, %d %b %Y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"]
+        .into_iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(value, format).ok())
+    {
+        return Some(date);
+    }
+
+    let mut parsed = Parsed::new();
+    parse(
+        &mut parsed,
+        value,
+        StrftimeItems::new("%A, %d-%b-%y %H:%M:%S GMT"),
+    )
+    .ok()?;
+    // RFC 9110 interprets an RFC 850 year more than 50 years ahead as a past year.
+    let cutoff = DateTime::from_timestamp(now, 0)?.checked_add_months(Months::new(600))?;
+    let suffix = parsed.year_mod_100()?;
+    let mut year = cutoff.year() - (cutoff.year() - suffix).rem_euclid(100);
+    if year == cutoff.year()
+        && (parsed.month()?, parsed.day()?, parsed.to_naive_time().ok()?)
+            > (cutoff.month(), cutoff.day(), cutoff.time())
+    {
+        year -= 100;
+    }
+    parsed.set_year(i64::from(year)).ok()?;
+    parsed.to_naive_datetime_with_offset(0).ok()
 }
 
 fn apply_auth(
@@ -469,6 +537,10 @@ fn extract_error_info(text: &str) -> UpstreamErrorInfo {
     let Some(error) = value.get("error") else {
         return UpstreamErrorInfo::default();
     };
+    extract_error_members(error)
+}
+
+pub(crate) fn extract_error_members(error: &Value) -> UpstreamErrorInfo {
     let metadata = error.get("metadata").and_then(Value::as_object);
     UpstreamErrorInfo {
         code: error.get("code").and_then(json_scalar_string).or_else(|| {

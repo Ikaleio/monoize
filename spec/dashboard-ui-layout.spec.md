@@ -241,7 +241,7 @@ PL4. Provider detail/editor MUST display:
 - provider-level fields: `name`, `enabled`, `max_retries`, and `group_ids` edited through the shared unordered multi-select group selector (GS rules, §11); freeform group text entry MUST NOT be offered
 - channel master list rows: name, type, base URL, model count, `权重 N`, and the effective status badge (PL18b)
 - selected Channel detail editor with per-model controls for: logical model, redirect target, multiplier, and delete
-- channel runtime health indicator: healthy/probing/unhealthy
+- Channel status badge selected by PL18b
 
 PL4.0. Provider detail/editor MUST NOT render or maintain a Provider-level model selector or Provider-level model editor.
 
@@ -255,7 +255,7 @@ PL4.5. `max_retries` MUST be edited as a two-option control: "尝试全部可用
 
 PL4.6. The request-timeout override hint MUST read "全局默认：N ms · 修改", where "修改" links to `/dashboard/admin-settings?setting=monoize_request_timeout_ms`.
 
-PL4.7. The editor MUST expose Provider-level `active_probe_enabled_override`, `active_probe_interval_seconds_override`, `active_probe_success_threshold_override` and `active_probe_model_override` in the routing section under "健康检查". Empty values serialize as `null` (inherit global).
+PL4.7. The Provider editor's routing section under "健康检查" MUST expose `active_probe_interval_seconds_override`, `active_probe_success_threshold_override`, `active_probe_model_override`, `active_probe_stream_override`, and `honor_rate_limit_override`. Empty numeric or model values MUST serialize as `null` (inherit global). The stream and honor-rate-limit controls MUST use the same three-state style: inherit global, on, and off serialize as `null`, `true`, and `false`, respectively. The stream control hint MUST show the inherited global value.
 
 PL4.2. At mobile widths, the Provider editor title row MUST reserve a dedicated right-side touch area for the dialog close button. The Provider `enabled` switch and the close button hit areas MUST NOT overlap, and each control MUST remain independently clickable.
 
@@ -396,9 +396,16 @@ PL18. In expanded provider card overview, channel runtime list row spacing MUST 
 - The runtime health label, Channel name, and Channel Base URL MUST share one visual vertical center at every viewport width. The row action group MUST remain vertically centered independently.
 - Weight text MUST read "权重 W（P%）" where P is W divided by the sum of weights of enabled Channels with weight > 0 in that Provider, rounded to an integer; P is omitted for a disabled or zero-weight Channel. Model count reads "N 个模型".
 - Each row MUST include a Channel enable switch with an accessible name containing the Channel name. Toggling it saves immediately through `PUT /api/dashboard/providers/{provider_id}/channels/{channel_id}/enabled` (CM-CH-EN-1), updates optimistically, and on failure reverts and shows a localized error toast.
-- The detail-test button MUST have the visible text "选择模型测试" (or an accessible name with the same text when icon-only) and the quick test button MUST state the model it will use in its tooltip ("使用 {model} 测试"), where the model is resolved like the server (Channel `active_probe_model_override` → Provider `active_probe_model_override` → global `monoize_active_probe_model` → smallest Channel model ID).
+- The detail-test button MUST have the visible text "选择模型测试" (or an accessible name with the same text when icon-only). The quick test button MUST state the model it will use in its tooltip ("使用 {model} 测试"). Resolve that model with the Channel-level rule in `monoize-upstream-routing.spec.md` AHS-3. The quick-test request MUST omit `stream`; the detail dialog sends the explicit selection per `channel-management.spec.md` CP-FE-8.
 
-PL18b. A Channel shows exactly one effective status badge, chosen by priority: "已禁用" (secondary, `enabled = false`) > "不接收流量" (secondary, `weight = 0`) > "不健康" (destructive) > "探测中" (warning) > "健康" (success). Disabled and zero-weight Channels MUST NOT show health. The same rule applies to the list rows and the editor master list; unsaved Channels in the editor show "未保存".
+PL18b. Each saved Channel MUST show exactly one badge in Provider list rows and the editor master list. Use the first matching condition:
+
+1. `enabled = false`: `disabled` ("已禁用", secondary).
+2. `weight = 0`: `no_traffic` ("不接收流量", secondary). This badge is not a health status.
+3. `_health_status = unhealthy`: `unhealthy` ("不健康", destructive).
+4. Otherwise: `healthy` ("健康", success).
+
+Unsaved Channels in the editor MUST show `unsaved` ("未保存") instead. The former `probing` badge and its localization keys are removed.
 
 PL18a. The Provider card header title, status badges, and visible metadata MUST share one visual vertical center. The title MUST NOT use a vertical translation.
 
@@ -434,13 +441,18 @@ PL21a. `GET /api/dashboard/providers` MAY aggregate `unpriced_model_ids` across 
 
 PL22. Closing the Provider editor with unsaved changes MUST open a confirmation dialog titled "放弃未保存的修改？" with three actions: "继续编辑" (closes only the confirmation and returns focus to the element focused before it opened), "放弃" (destructive red hover styling; closes the editor without saving) and "保存并关闭" (runs the same validation and save as the footer Save; on success closes the editor, on validation failure closes the confirmation and navigates to the invalid field per PL26). The footer status text MUST read "有未保存的更改" when dirty, "尚未保存" for a clean create draft, and "无改动" for a clean edit draft.
 
-PL23. The selected Channel detail MUST expose channel-level passive breaker override fields with empty value meaning "inherit global setting":
+PL23. The selected Channel detail MUST expose these passive breaker overrides. An empty numeric value MUST serialize as `null` (inherit global):
 
-- `passive_failure_threshold_override`
+- `passive_failure_count_threshold_override`
 - `passive_cooldown_seconds_override`
 - `passive_window_seconds_override`
 - `passive_rate_limit_cooldown_seconds_override`
-- `active_probe_enabled_override`, `active_probe_model_override`, `active_probe_interval_seconds_override`, `active_probe_success_threshold_override`
+
+Place the `honor_rate_limit_override` control next to `passive_rate_limit_cooldown_seconds_override`. Its choices inherit, on, and off MUST serialize as `null`, `true`, and `false`, respectively. Inherit uses the Provider override when non-null and the global setting otherwise (CFG-4a).
+
+The selected Channel detail MUST also expose `active_probe_model_override`, `active_probe_interval_seconds_override`, and `active_probe_success_threshold_override`. An empty field MUST serialize as `null` and inherit per CFG-3a.
+
+The Channel probe overrides MUST include `active_probe_stream_override` in the same three-state style as the honor-rate-limit control. Inherit, on, and off MUST serialize as `null`, `true`, and `false`, respectively. The hint MUST show the inherited Provider value when set, or the global value otherwise (CFG-3a).
 
 PL23b. The selected Channel detail MUST expose these Channel affinity overrides. The inherit option or an empty numeric value MUST serialize as null:
 
@@ -492,17 +504,18 @@ category sections, save bar, skeleton, and motion) is governed by
 statement calls the container a "card" or "section", the container is the corresponding
 category section defined there.
 
-ST1. `/dashboard/admin-settings` MUST include active probe, passive breaker, timeout, billing, request capture, and protocol settings in the categories defined by `system-settings-ui.spec.md` SSU-1.
+ST1. `/dashboard/admin-settings` MUST include active-probe parameters, passive breaker settings (including the honor-rate-limit switch), timeout, billing, request capture, and protocol settings in the categories defined by `system-settings-ui.spec.md` SSU-1 and SSU-1a.
 
 ST2. Those categories MUST expose at least these editable fields bound to `GET/PUT /api/dashboard/settings`:
 
-- `monoize_active_probe_enabled` (boolean switch)
 - `monoize_active_probe_interval_seconds` (integer >= 1)
 - `monoize_active_probe_success_threshold` (integer >= 1)
 - `monoize_active_probe_model` (optional string, empty means null)
+- `monoize_active_probe_stream` (boolean switch, default `true`, in the Active Probe group per SSU-3c)
 - `monoize_passive_failure_threshold` (integer >= 1)
 - `monoize_passive_cooldown_seconds` (integer >= 1)
 - `monoize_passive_window_seconds` (integer >= 1)
+- `monoize_honor_rate_limit` (boolean switch, default `false`; placement and description in SSU-3c)
 - `monoize_passive_rate_limit_cooldown_seconds` (integer >= 1)
 - `monoize_request_timeout_ms` (integer >= 1)
 - `monoize_stream_idle_timeout_ms` (integer >= 1)

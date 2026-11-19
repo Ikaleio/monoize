@@ -315,7 +315,7 @@ FP4e-1. Monoize-generated `/v1/responses` SSE `event: error` payloads emitted af
 
 FP4f. A terminal failure in FP4e MUST finalize the request log with `status = "error"`, `error_code` equal to the upstream error code when present, `error_http_status` equal to the upstream HTTP status when present, no token usage, and no billing charge. Under RTA-8b the log instead records the downstream values `upstream_error` and `502`; the original status and code stay in `tried_providers`. The same rule applies to a terminal failure after `COMMIT` and before the first output event.
 
-FP4g. After request-log admission succeeds, every local request-transform, upstream-encode, upstream-decode, response-transform, stream-task, and billing error MUST schedule exactly one terminal request-log row before the forwarding handler returns or its response-stream task exits. A `?` propagation or task-join error MUST NOT bypass terminal scheduling.
+FP4g. After request-log admission succeeds, every terminal local request-transform, upstream-encode, upstream-decode, response-transform, stream-task, and billing error MUST schedule exactly one terminal request-log row before the forwarding handler returns or its response-stream task exits. A `?` propagation or task-join error MUST NOT bypass terminal scheduling. A target-capability error does not schedule a terminal row when routing can continue (RTA-5e, RL1b-2).
 
 FP4h. For a request with `stream=true`, Monoize MUST NOT return the downstream SSE headers before the first upstream attempt is accepted. An attempt is accepted when (a) an upstream HTTP call returns a `2xx` status, or (b) an upstream Responses WebSocket returns `101` and the decoder yields its first non-provider-control event, or (c) a buffered synthetic stream attempt (FP6a3, FP6j) produces a complete decoded response and passes every response transform. Monoize MUST commit the headers immediately after acceptance. Durable request-log admission MUST still succeed before any upstream dispatch as required by `spec/request-logs.spec.md`. The 15-second SSE keep-alive (STR3c.1, DM7b) MUST start after `COMMIT` and MUST NOT emit before it. Pre-output retries after `COMMIT` remain invisible to the client except for keep-alive frames (STRM-2).
 
@@ -405,11 +405,11 @@ FP6k.1. A handler MUST schedule the terminal success log only after every requir
 
 FP6k.1a. A non-stream handler without a caller-supplied response validator MUST encode the downstream response body once, before billing, and MUST deliver that same encoded body. It MUST NOT encode the response again for delivery. Responses history decoration (`id`, `previous_response_id`, `store`) MUST be applied before that encoding. An encoding failure MUST fail the request before billing under FP6k.2.
 
-FP6k.2. If any step in FP6k.1 fails after admission, including an asynchronous task join failure, the handler MUST schedule one terminal error log before it returns the error. The terminal log `error_code`, `error_http_status`, and error message MUST describe the same `AppError` returned by the handler. The terminal error log MUST contain no token usage and no billing charge.
+FP6k.2. If any step in FP6k.1 produces a terminal error after admission, including an asynchronous task join failure, the handler MUST schedule one terminal error log before it returns the error. The terminal log `error_code`, `error_http_status`, and error message MUST describe the same `AppError` returned by the handler. The terminal error log MUST contain no token usage and no billing charge.
 
 FP6k.3. If an error occurs after an upstream attempt has been selected, the terminal error log MUST identify that attempt. If no upstream attempt was selected, the terminal error log MUST omit provider and channel identity.
 
-FP6k.4. A retryable upstream-attempt failure MUST NOT schedule a terminal log while another retry is permitted. The handler MUST schedule one terminal error log only when retry processing terminates. A successful retry MUST schedule one terminal success log and no terminal error log.
+FP6k.4. A failed upstream attempt or a target-capability failure MUST NOT schedule a terminal log while routing can continue (RTA-5). An exhausted route MUST schedule one terminal error log. A successful later attempt MUST schedule one terminal success log and no terminal error log.
 
 FP6k.5. Each admitted Images request is an independent request-log lifecycle. A task panic, task cancellation, streamed-response collection failure, typed image-conversion failure, missing usage error, or billing error in one subrequest MUST schedule exactly one terminal error log for that subrequest request identifier.
 
@@ -1180,16 +1180,17 @@ PC2.4. Assistant message history preservation for chat adapter:
 - When decoding downstream Chat Completions history, if one assistant message contains both non-empty `content` and `tool_calls`, Monoize MUST preserve both within the same assistant turn by emitting flat URP v2 nodes in source order rather than discarding either surface.
 - When encoding that assistant turn back to an upstream `type=chat_completion` request, Monoize MAY encode the assistant text or refusal content and the assistant `tool_calls` on the same upstream `messages[]` element when the target protocol supports that combined form.
 
-PC2.5. Chat Completions file and audio input content:
+PC2.5. Chat Completions image, file, and audio input content:
 
+- The Chat encoder MUST use one content-part encoder for user-message images and OpenRouter tool-result images. Encode an image URL or MIME-bearing image data URL as `{ "type": "image_url", "image_url": { "url": <url>, "detail"?: <detail> } }`. Use the URL source's detail for a URL and `MediaMetadata.detail` for inline bytes. Omit `detail` when absent.
 - A content part `{type:"file",file:{file_id:<id>}}` MUST decode as FileSource::FileId with typed OpenAI resource provenance.
 - File Base64 decoding MUST preserve filename in MediaMetadata. Data URLs MUST separate MIME and bytes. Raw Base64 MUST follow MT2/MT3 MIME inference and validation.
 - A content part `{type:"input_audio",input_audio:{data:<base64>,format:"wav"|"mp3"}}` MUST decode as `AudioSource::Base64` with media type `audio/wav` or `audio/mpeg` respectively.
-- Chat MUST encode compatible file IDs and Base64 files using nested file syntax. Text/Content documents MUST expand under MT11. Unsupported URLs MUST fail explicitly.
+- The Chat encoder MUST use one content-part encoder for user-message files and OpenRouter tool-result files. Encode compatible file IDs as `{ "type": "file", "file": { "file_id": <id> } }` and Base64 files with a MIME-bearing data URL in `file.file_data`. For the `openrouter` dialect also encode a public HTTP(S) file URL in `file.file_data` as the URL string; do not fetch its bytes. Other Chat dialects MUST reject file URLs under MT20a. Add `file.filename` from `MediaMetadata.filename` when present. Text/Content documents MUST expand under MT11.
 - Chat user audio MUST use WAV or MP3 input_audio. Assistant history MAY reference native audio by id. Other roles, sources, or formats MUST fail explicitly.
 - Stable Responses and Messages requests MUST reject Audio nodes. Gemini MAY use supported inline-data or file-data audio carriers.
 
-PC2.6. Responses and Chat file_data MUST encode one MIME-bearing data URL. Messages MUST use PDF Base64 or a UTF-8 text source under MT13. Encoders MUST NOT emit unsupported sibling MIME fields.
+PC2.6. For inline bytes, Responses and Chat `file_data` MUST encode one MIME-bearing data URL. OpenRouter Chat also uses `file_data` for public file URLs under PC2.5. Messages MUST use PDF Base64 or a UTF-8 text source under MT13. Encoders MUST NOT emit unsupported sibling MIME fields.
 
 PC2.7. A Chat request decoder MUST map top-level `stop`, `verbosity`, and `user` into typed `UrpRequestV2.stop`, `UrpRequestV2.verbosity`, and `UrpRequestV2.user`. A Chat encoder MUST restore scalar-versus-array `stop` shape, emit top-level `verbosity`, and emit top-level `user`. Typed fields MUST win collisions with `extra_body`.
 
@@ -1212,7 +1213,13 @@ PC2.9. Deprecated Chat function-call lifecycle preservation:
 - A Chat stream decoder MUST normalize `delta.function_call` and terminal `message.function_call` through the same marked `ToolCall` lifecycle. A Chat stream encoder MUST emit marked call chunks under `delta.function_call`, preserve argument-fragment order, and use terminal `finish_reason = "function_call"`.
 - Legacy markers are internal metadata under `XTRA-10`. They MUST remain available until target encoding and MUST NOT appear on the wire.
 
-PC2.10. Chat tool-result content encode. For a `ToolResult` encoded as a Chat `role = "tool"` or `role = "function"` message, let `T` be the ordered text entries of its content. If `T` is empty, `content` MUST be `""`. If `T` has exactly one entry and that entry has no wire field other than its text, `content` MUST be that text. Otherwise `content` MUST be an array of `{ "type": "text", "text": <entry> }` objects in order, each merged with that entry's non-internal `extra_body` and any cache marker that CB-12 emits; Monoize MUST NOT join the entries. If `ToolResult.is_error = true`, Monoize MUST prefix the first text entry with `"Error: "`, or use `"Error"` when `T` is empty, because Chat tool messages have no error flag.
+PC2.10. For a `ToolResult` encoded as a Chat `role = "tool"` or `role = "function"` message, use the attempt's effective Chat dialect (AT-3a in `monoize-upstream-routing.spec.md`). Apply these rules after media preparation (MT10 through MT15):
+
+1. A text content part MUST have `{ "type": "text", "text": <entry> }` merged with the entry's non-internal `extra_body` and any cache marker emitted under CB-12. Do not join separate text entries.
+2. If the dialect is `openrouter` and prepared content contains an image or file, `content` MUST be an array preserving the order of text, image, and file entries. Use the same Chat content-part encoder as for user-message images and files on this dialect (PC2.5). Do not drop an image or file or reject it solely because it appears in a tool result.
+3. If the dialect is `openai`, `deepseek`, `vercel`, or `generic`, an image or non-text file in prepared tool-result content MUST fail the attempt under MT20a and RTA-5e, not stop routing.
+4. If `ToolResult.is_error = true`, prefix the first text entry with `"Error: "` without moving it. If no text entry exists, insert a leading text part `{ "type": "text", "text": "Error" }`. Chat tool messages do not have an error flag.
+5. For text-only results, including an empty result, keep the existing `content` shape: `""` for no entries, a string for exactly one text entry with no additional wire fields, and otherwise an array of text parts in order. Determine the shape after applying the error prefix or inserting the error text. Results containing an image or file MUST retain array form.
 
 PC2.11. An assistant `Text` node with empty `content`, no citations, and no node-local wire extra carries no Chat wire content. The Chat request encoder MUST drop it before message grouping, so it neither emits an assistant message nor splits the surrounding assistant turn into two messages.
 
@@ -1527,7 +1534,7 @@ PM12a. A Messages encoder MUST render the non-stream `usage`, `message_start.mes
 
 PG0. `gemini-codec.spec.md` defines the current detailed GenerateContent mapping contract and supersedes older codec restrictions in this section.
 
-PG1. Monoize MUST call Gemini native endpoints under the provider base URL. The API version is the trailing version segment of the base URL when present (PP2a); otherwise it is `v1beta`. The active probe MUST build its URL with the same joining rule.
+PG1. Monoize MUST call Gemini native endpoints under the provider base URL, including for completion-family probes using the forwarding request construction (`monoize-upstream-routing.spec.md` AHS-4). The API version is the trailing version segment of the base URL when present (PP2a); otherwise it is `v1beta`.
 
 PG2. For non-streaming requests, Monoize MUST call:
 

@@ -2,7 +2,7 @@
 
 ## 0. Scope
 
-ISM0.1. This specification defines a single initial SeaORM migration module under `src/migration/`.
+ISM0.1. This specification defines the initial SeaORM migration under `src/migration/` and the subsequent schema changes stated below.
 
 ISM0.2. The initial migration MUST create exactly 16 tables and their required constraints/indexes.
 
@@ -12,9 +12,7 @@ ISM0.3. The migration MUST execute on SQLite and PostgreSQL without requiring da
 
 ISM1.1. `src/migration/mod.rs` MUST define `Migrator` implementing `MigratorTrait`.
 
-ISM1.2. `Migrator::migrations()` MUST return exactly one migration entry:
-
-- `m20250101_000001_create_tables::Migration`
+ISM1.2. `Migrator::migrations()` MUST return `m20250101_000001_create_tables::Migration` as the first migration, followed by registered post-initial migrations in application order.
 
 ISM1.3. `src/migration/mod.rs` MUST declare `mod m20250101_000001_create_tables;`.
 
@@ -230,7 +228,7 @@ ISM4.9. `monoize_providers` columns:
 - `max_retries` INTEGER NOT NULL DEFAULT 3
 - `transforms` TEXT NOT NULL DEFAULT '[]'
 - `api_type_overrides` TEXT NOT NULL DEFAULT '[]'
-- `active_probe_enabled_override` INTEGER NULL
+- `active_probe_enabled_override` INTEGER NULL (historical; removed by ISM4.11b)
 - `active_probe_interval_seconds_override` INTEGER NULL
 - `active_probe_success_threshold_override` INTEGER NULL
 - `active_probe_model_override` TEXT NULL
@@ -256,7 +254,7 @@ ISM4.11. `monoize_channels` columns:
 - `passive_cooldown_seconds_override` INTEGER NULL
 - `passive_window_seconds_override` INTEGER NULL
 - `passive_rate_limit_cooldown_seconds_override` INTEGER NULL
-- `active_probe_enabled_override` INTEGER NULL
+- `active_probe_enabled_override` INTEGER NULL (historical; removed by ISM4.11b)
 - `active_probe_interval_seconds_override` INTEGER NULL
 - `active_probe_success_threshold_override` INTEGER NULL
 - `active_probe_model_override` TEXT NULL
@@ -268,6 +266,16 @@ ISM4.11. `monoize_channels` columns:
 - `updated_at` TEXT NOT NULL
 
 ISM4.11a. Migration `m20260729_000024_channel_affinity_overrides` MUST add the four Channel affinity override columns when they are absent on SQLite or PostgreSQL. Running the migration when a column already exists MUST NOT fail.
+
+ISM4.11b. Migration `m20261119_000062_channel_health_three_state` MUST be registered in
+`src/migration/mod.rs` after `m20261118_000061_cache_write_prices`. On SQLite and
+PostgreSQL, it MUST drop `active_probe_enabled_override` from `monoize_providers` and `monoize_channels`.
+The same migration MUST add `honor_rate_limit_override` and `active_probe_stream_override`
+as nullable INTEGER columns to both tables. Both columns MUST be null on existing rows;
+do not copy the removed value. The application MUST write `0` for `false`, `1` for `true`,
+and SQL NULL for inheritance. Decode non-null values per `monoize-upstream-routing.spec.md` CFG-1.
+The migration MUST remove the `monoize_active_probe_enabled` row from `system_settings` if present.
+The post-migration schema MUST NOT retain the removed fields or setting as aliases.
 
 ISM4.10a. Migration `m20260403_000013_drop_orphan_channel_override_columns` MUST be idempotent when these obsolete columns are absent from a fresh baseline schema:
 

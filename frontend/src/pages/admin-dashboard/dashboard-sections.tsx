@@ -40,14 +40,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-type ChannelStatus = "cooling" | "disabled" | "healthy" | "unhealthy";
+type ChannelStatus = "disabled" | "healthy" | "unhealthy";
 
 /** ADF-5c: the order in which an on-call admin needs to read the rows. */
 const STATUS_SEVERITY: Record<ChannelStatus, number> = {
   unhealthy: 0,
-  cooling: 1,
-  disabled: 2,
-  healthy: 3,
+  disabled: 1,
+  healthy: 2,
 };
 
 const LINK_CLASS =
@@ -86,15 +85,9 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`;
 }
 
-/** ADF-5b: cooldown wins over the enabled flag, which wins over the health flag. */
 function channelStatus(channel: AdminOverviewChannelHealth): ChannelStatus {
-  if (channel.cooldown_active) return "cooling";
   if (!channel.enabled) return "disabled";
   return channel.healthy ? "healthy" : "unhealthy";
-}
-
-function isAbnormal(status: ChannelStatus): boolean {
-  return status === "cooling" || status === "unhealthy";
 }
 
 function KeyValueRows({ rows }: { rows: KeyValueRow[] }) {
@@ -287,9 +280,6 @@ export function UsageRankingCard({
 
 function ChannelStatusBadge({ status }: { status: ChannelStatus }) {
   const { t } = useTranslation();
-  if (status === "cooling") {
-    return <StatusBadge variant="warning">{t("adminDashboard.coolingDown")}</StatusBadge>;
-  }
   if (status === "disabled") return <Badge variant="secondary">{t("adminDashboard.disabled")}</Badge>;
   if (status === "healthy") {
     return <StatusBadge variant="success">{t("adminDashboard.healthy")}</StatusBadge>;
@@ -297,7 +287,6 @@ function ChannelStatusBadge({ status }: { status: ChannelStatus }) {
   return <StatusBadge variant="destructive">{t("adminDashboard.unhealthy")}</StatusBadge>;
 }
 
-/** ADF-5d: abnormal rows lead straight to the failing requests of that Channel. */
 function ChannelLogsLink({ channel }: { channel: AdminOverviewChannelHealth }) {
   const { t } = useTranslation();
   const label = t("adminDashboard.viewChannelLogs", { channel: channel.channel_name });
@@ -317,7 +306,7 @@ function ChannelStatusCell({ channel, status }: { channel: AdminOverviewChannelH
     <>
       <span className="flex items-center gap-1">
         <ChannelStatusBadge status={status} />
-        {isAbnormal(status) ? <ChannelLogsLink channel={channel} /> : null}
+        {status === "unhealthy" ? <ChannelLogsLink channel={channel} /> : null}
       </span>
       {models.length > 0 ? (
         <span className="mt-1 block truncate font-mono text-error-foreground" title={models.join(", ")}>
@@ -388,7 +377,7 @@ export function ChannelHealthCard({
 }) {
   const { t } = useTranslation();
   const scrollParent = useContext(DashboardScrollParentContext);
-  const [abnormalOnlyRequested, setAbnormalOnlyRequested] = useState(false);
+  const [unhealthyOnlyRequested, setUnhealthyOnlyRequested] = useState(false);
   const rows = data.channel_health;
   const sortedRows = useMemo(
     () =>
@@ -397,14 +386,13 @@ export function ChannelHealthCard({
       ),
     [rows]
   );
-  const abnormalRows = useMemo(
-    () => sortedRows.filter((channel) => isAbnormal(channelStatus(channel))),
+  const unhealthyRows = useMemo(
+    () => sortedRows.filter((channel) => channelStatus(channel) === "unhealthy"),
     [sortedRows]
   );
-  const unhealthy = abnormalRows.length;
-  // Recovery of the last abnormal Channel must not leave an empty list behind.
-  const abnormalOnly = abnormalOnlyRequested && unhealthy > 0;
-  const visibleRows = abnormalOnly ? abnormalRows : sortedRows;
+  const unhealthy = unhealthyRows.length;
+  const unhealthyOnly = unhealthyOnlyRequested && unhealthy > 0;
+  const visibleRows = unhealthyOnly ? unhealthyRows : sortedRows;
 
   return (
     <Card className="overflow-clip">
@@ -419,7 +407,7 @@ export function ChannelHealthCard({
                 <button
                   type="button"
                   className={LINK_CLASS}
-                  onClick={() => setAbnormalOnlyRequested(true)}
+                  onClick={() => setUnhealthyOnlyRequested(true)}
                 >
                   {t("adminDashboard.channelSummaryUnhealthy", { count: unhealthy })}
                 </button>
@@ -432,10 +420,10 @@ export function ChannelHealthCard({
             <Button
               type="button"
               variant="outline"
-              aria-pressed={abnormalOnly}
+              aria-pressed={unhealthyOnly}
               disabled={unhealthy === 0}
-              onClick={() => setAbnormalOnlyRequested(!abnormalOnly)}
-              className={cn("h-9 px-3 text-sm", abnormalOnly && "bg-accent text-accent-foreground")}
+              onClick={() => setUnhealthyOnlyRequested(!unhealthyOnly)}
+              className={cn("h-9 px-3 text-sm", unhealthyOnly && "bg-accent text-accent-foreground")}
             >
               {t("adminDashboard.abnormalOnly", { count: unhealthy })}
             </Button>

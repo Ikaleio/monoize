@@ -28,7 +28,6 @@ if (process.argv[2] === "seed") {
   );
   for (const key of [
     "captcha_enabled",
-    "monoize_active_probe_enabled",
     "price_sync_auto_enabled",
   ])
     insert.run(key, "false", new Date().toISOString());
@@ -82,7 +81,6 @@ async function bootstrap() {
   await api(`users/${auth.user.id}`, "PUT", { balance_unlimited: true });
   await api("settings", "PUT", {
     captcha_enabled: false,
-    monoize_active_probe_enabled: false,
     price_sync_auto_enabled: false,
     monoize_request_capture_enabled: true,
     monoize_request_capture_max_total_bytes: BUDGET,
@@ -110,7 +108,6 @@ async function bootstrap() {
     channel_max_retries: 0,
     channel_retry_interval_ms: 0,
     circuit_breaker_enabled: false,
-    active_probe_enabled_override: false,
     group_ids: [auth.user.group_id],
     transforms: [],
     channels: [
@@ -121,7 +118,6 @@ async function bootstrap() {
         api_key: cfg.apiKey,
         enabled: true,
         weight: 1,
-        active_probe_enabled_override: false,
         models: { [ALIAS]: { redirect: cfg.model, multiplier: "1" } },
       },
     ],
