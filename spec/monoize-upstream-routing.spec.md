@@ -138,9 +138,18 @@ When this setting has never been saved, use exactly the following list in the sp
 ```json
 [
   { "status_codes": [503], "keyword": "no available account", "class": "persistent" },
-  { "status_codes": [], "keyword": "no credits remaining", "class": "persistent" }
+  { "status_codes": [], "keyword": "no credits remaining", "class": "persistent" },
+  { "status_codes": [503], "keyword": "no available gemini accounts", "class": "persistent" },
+  { "status_codes": [503], "keyword": "no available openai accounts", "class": "persistent" },
+  { "status_codes": [503], "keyword": "no available grok accounts", "class": "persistent" },
+  { "status_codes": [503], "keyword": "no available compatible accounts", "class": "persistent" },
+  { "status_codes": [502], "keyword": "upstream authentication failed", "class": "persistent" },
+  { "status_codes": [502], "keyword": "upstream access forbidden", "class": "persistent" },
+  { "status_codes": [429], "keyword": "额度已用完", "class": "persistent" }
 ]
 ```
+
+The default list targets relay messages whose HTTP status would otherwise select a Transient or RateLimited built-in class although the condition belongs to the relay key or its account pool. The `no available account` rule also matches sub2api `No available accounts` responses. The platform-specific `no available … accounts` rules match sub2api responses for Gemini, OpenAI, Grok, and compatible-image account pools. The two HTTP `502` rules match sub2api responses after every upstream account in the key's group returned HTTP `401` or `403`. The HTTP `429` rule matches the sub2api API-key total quota message `API key 额度已用完`. It does not match the sub2api window-limit messages, which contain `限额已用完`, so those remain RateLimited under RTA-5b.
 
 A stored list replaces this default in full. A stored empty list disables custom matching and does not restore the default. A successful mutation MUST invalidate health under `database-provider-routing.spec.md` R-H-9.
 

@@ -152,7 +152,7 @@ descriptions, class options, action names, and validation errors MUST be localiz
 
 | setting | constraints | default when never saved |
 | --- | --- | --- |
-| `monoize_failure_classification_rules` | At most 100 ordered rules; status codes `100..=599`; trimmed keyword length `1..=200` Unicode scalar values. | In order: HTTP `503` + `no available account` → `persistent`; any status + `no credits remaining` → `persistent` (CFG-4b). |
+| `monoize_failure_classification_rules` | At most 100 ordered rules; status codes `100..=599`; trimmed keyword length `1..=200` Unicode scalar values. | The nine-rule list of CFG-4b, in that order: two account and credit rules, four platform-specific `no available … accounts` rules on HTTP `503`, two upstream credential rules on HTTP `502`, and one quota rule on HTTP `429`; every default class is `persistent`. |
 
 ## 2. Page layout
 

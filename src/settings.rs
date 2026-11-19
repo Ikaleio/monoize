@@ -113,19 +113,29 @@ pub struct FailureClassificationRule {
     pub class: RetryableFailureClass,
 }
 
+/// CFG-4b defaults, in order: key-level relay conditions whose HTTP status
+/// would otherwise classify as Transient or RateLimited.
+const DEFAULT_PERSISTENT_RULES: [(Option<u16>, &str); 9] = [
+    (Some(503), "no available account"),
+    (None, "no credits remaining"),
+    (Some(503), "no available gemini accounts"),
+    (Some(503), "no available openai accounts"),
+    (Some(503), "no available grok accounts"),
+    (Some(503), "no available compatible accounts"),
+    (Some(502), "upstream authentication failed"),
+    (Some(502), "upstream access forbidden"),
+    (Some(429), "额度已用完"),
+];
+
 pub(crate) fn default_failure_classification_rules() -> Vec<FailureClassificationRule> {
-    vec![
-        FailureClassificationRule {
-            status_codes: vec![503],
-            keyword: "no available account".to_owned(),
+    DEFAULT_PERSISTENT_RULES
+        .iter()
+        .map(|&(status, keyword)| FailureClassificationRule {
+            status_codes: status.into_iter().collect(),
+            keyword: keyword.to_owned(),
             class: RetryableFailureClass::Persistent,
-        },
-        FailureClassificationRule {
-            status_codes: Vec::new(),
-            keyword: "no credits remaining".to_owned(),
-            class: RetryableFailureClass::Persistent,
-        },
-    ]
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

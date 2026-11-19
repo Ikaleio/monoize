@@ -77,8 +77,17 @@ Monoize 先依清單順序檢查 `monoize_failure_classification_rules`，再套
 | --- | --- | --- |
 | `[503]` | `no available account` | `persistent` |
 | `[]` | `no credits remaining` | `persistent` |
+| `[503]` | `no available gemini accounts` | `persistent` |
+| `[503]` | `no available openai accounts` | `persistent` |
+| `[503]` | `no available grok accounts` | `persistent` |
+| `[503]` | `no available compatible accounts` | `persistent` |
+| `[502]` | `upstream authentication failed` | `persistent` |
+| `[502]` | `upstream access forbidden` | `persistent` |
+| `[429]` | `额度已用完` | `persistent` |
 
-儲存的清單會取代這兩條預設規則。儲存空清單可只使用內建分類。在[系統設定](/zh-TW/docs/dashboard)中編輯清單。
+這些預設規則涵蓋 sub2api 等中繼服務的金鑰層級錯誤。沒有這些規則時，這些錯誤會被歸為暫時性或限流故障。`429` 視窗限額（例如 `api key 5小时限额已用完`）不符，仍以限流處理。
+
+儲存的清單會取代所有預設規則。儲存空清單可只使用內建分類。在[系統設定](/zh-TW/docs/dashboard)中編輯清單。
 
 如果沒有規則相符，Monoize 會依下列順序套用第一條相符的內建規則。比對上游錯誤的 `code` 和 `type` 時，先去除前後空白，再忽略 ASCII 字母的大小寫。
 
