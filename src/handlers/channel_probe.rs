@@ -474,7 +474,11 @@ impl ProbeResponse {
 
 fn format_probe_http_error(status: StatusCode, body: &str) -> String {
     let body = body.trim();
-    let body = &body[..body.floor_char_boundary(512)];
+    let mut end = body.len().min(512);
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let body = &body[..end];
     let mut message = format!("upstream returned {}", status.as_u16());
     if let Some(reason) = status.canonical_reason() {
         message.push(' ');
