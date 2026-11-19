@@ -61,6 +61,21 @@ DOC-24. The Dashboard overview MUST describe sidebar collapse, expansion, mobile
 and the Ctrl+B or Meta+B shortcut in all four locales. Its navigation section MUST include
 the current sidebar screenshot from the locale set defined by DOC-62.
 
+DOC-25. The routing classification section, the Dashboard overview's System Settings
+section, and the Troubleshooting page MUST document failure classification rules in
+`en`, `zh`, `zh-TW`, and `ja`:
+
+- `routing.mdx` and its translations MUST explain the ordered first-match behavior before
+  built-in classification, status and keyword matching, the default list, and how
+  each final class affects passive health, retry eligibility, and shared-origin blasts.
+- `dashboard/index.mdx` and its translations MUST identify the Passive Breaker editor
+  and describe adding, removing, ordering, and saving rules, including saving an empty list.
+- `troubleshooting.mdx` and its translations MUST include the literal upstream message
+  `This API key has no available account`. Explain that the default HTTP `503` rule
+  treats this response as Persistent, trips an enabled breaker's affected key without
+  waiting for the failure threshold, and does not sample same-origin peers. Explain
+  how to check the status and rule list when the response does not match the default.
+
 ## 4. Writing style
 
 DOC-30. All prose MUST follow Simplified Technical English conventions:

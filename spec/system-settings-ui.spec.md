@@ -24,7 +24,7 @@ organized by administrative intent, with these stable ids, in this order:
 | 2 | `access` | `settings.categoryAccess` | `registration_enabled`, `captcha_enabled`, `session_ttl_days`, `api_key_max_per_user` |
 | 3 | `models` | `settings.categoryModels` | `codex_model_ids`, `reasoning_suffix_map`, `global_model_redirects` |
 | 4 | `transforms` | `settings.categoryTransforms` | `global_transforms` |
-| 5 | `routing` | `settings.categoryRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_active_probe_stream`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_honor_rate_limit`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_request_timeout_ms`, `monoize_stream_idle_timeout_ms` |
+| 5 | `routing` | `settings.categoryRouting` | `monoize_affinity_enabled`, `monoize_affinity_failback_mode`, `monoize_affinity_idle_ttl_seconds`, `monoize_affinity_failback_delay_seconds`, `monoize_active_probe_interval_seconds`, `monoize_active_probe_success_threshold`, `monoize_active_probe_model`, `monoize_active_probe_stream`, `monoize_passive_failure_threshold`, `monoize_passive_cooldown_seconds`, `monoize_passive_window_seconds`, `monoize_honor_rate_limit`, `monoize_passive_rate_limit_cooldown_seconds`, `monoize_failure_classification_rules`, `monoize_request_timeout_ms`, `monoize_stream_idle_timeout_ms` |
 | 6 | `billing` | `settings.categoryBilling` | `monoize_enable_estimated_billing`, `allow_free_when_unpriced`, `allow_free_when_missing_usage` |
 | 7 | `privacy` | `settings.categoryPrivacy` | `monoize_request_capture_enabled`, `monoize_request_capture_max_total_bytes`, `monoize_mask_sensitive_info` |
 | 8 | `compatibility` | `settings.categoryCompatibility` | `monoize_extra_fields_whitelist` (sub-keys `chat_completion`, `responses`, `messages`, `gemini`), `monoize_strip_cross_protocol_nested_extra` |
@@ -126,11 +126,33 @@ switch that defaults to on. In the Passive Breaker group (`routing.passive`), re
 `monoize_passive_rate_limit_cooldown_seconds`. The switch defaults to off. Its
 description MUST state that this setting controls whether RateLimited trips wait the
 rate-limit cooldown or a longer Retry-After before the first probe or timed recovery.
-HTTP 429 with a billing-exhaustion signal is Persistent, not RateLimited (RTA-5a).
+The built-in classifier treats HTTP 429 with a billing-exhaustion signal as Persistent,
+not RateLimited (RTA-5a and RTA-5b).
 The `monoize_passive_cooldown_seconds` description MUST state that this
 setting sets the timed-recovery wait for Replicate Channels and Channels on replica
 nodes. It MUST also state that timed recovery uses this wait for rate-limit trips when
 honor-rate-limit is off.
+
+SSU-3d. Render one searchable entry with id `monoize_failure_classification_rules` in the
+Passive Breaker group (`routing.passive`). Its editor MUST render rules in array order.
+Each row MUST provide a comma-separated HTTP status-code input, a keyword text input,
+and a select with exactly `persistent`, `rate_limited`, and `transient` as its values.
+Provide add, remove, move up, and move down controls. Add appends a row; move exchanges
+it with the adjacent row in the selected direction. Do not allow adding a 101st row or
+moving past an end of the list. An empty or whitespace-only status input means any
+status. For non-empty input, split on commas and trim each token. Each token MUST be an
+integer in `100..=599`; an empty token in a non-empty input is invalid. Deduplicate valid
+codes and validate the trimmed keyword under CFG-4b and SSU-27 before saving.
+
+The editor's description MUST state that the first matching rule wins and runs before
+the built-in classification. It MUST state that matching uses the upstream error's
+message, code, or type and that a blank status input matches any status. Labels,
+descriptions, class options, action names, and validation errors MUST be localized in
+`en`, `zh`, `zh-TW`, and `ja`.
+
+| setting | constraints | default when never saved |
+| --- | --- | --- |
+| `monoize_failure_classification_rules` | At most 100 ordered rules; status codes `100..=599`; trimmed keyword length `1..=200` Unicode scalar values. | In order: HTTP `503` + `no available account` → `persistent`; any status + `no credits remaining` → `persistent` (CFG-4b). |
 
 ## 2. Page layout
 
@@ -307,6 +329,15 @@ lookaround and backreferences are rejected; other syntax follows `new RegExp`. B
 errors do not block saving, because the backend is authoritative (SSU-22). The nav button of
 the `models` category shows the error dot while any rendered pattern is invalid.
 
+SSU-20e. Keep classification rules and their invalid input text in the draft across
+category changes and section unmounts. Adding or removing a rule changes the draft
+immediately. Compare valid rule lists after trimming keywords and normalizing status
+codes under CFG-4b. Compare rules in list order. Reordering distinct rules MUST count as
+a change even if the number of rules stays equal. An invalid edited field MUST keep
+the draft dirty and show an inline `FieldError` on that row and field. Discard MUST
+restore the server list and clear these errors. The editor MUST NOT drop a blank or
+invalid rule silently during save.
+
 SSU-21. The save bar MUST render if and only if the page is dirty or a save is in flight. It
 is sticky at the bottom edge of `<main>` inside the content column and contains: the text
 `settings.unsavedChangesCount` (plural, the number of differing entries), a "view changes"
@@ -317,7 +348,7 @@ flight. The save button is the only default-variant button on the page. The bar 
 leaves with opacity and a vertical offset of at most 8px; under reduced motion it animates
 opacity only.
 
-SSU-21b. While any `NumberField` is invalid or any suffix is duplicated, the save button MUST
+SSU-21b. While any `NumberField` is invalid, any suffix is duplicated, or the classification rule draft fails validation (SSU-20e), the save button MUST
 be disabled, its `title` and a visible line in the bar MUST state
 `settings.saveBlockedInvalid`, and the nav button of each affected category shows the error
 dot. An invalid `NumberField` that unmounts discards its raw text and stops blocking.
@@ -327,6 +358,9 @@ SSU-21c. "View changes" opens a `Popover` listing every differing entry in SSU-1
 their SSU-2b unit, strings verbatim, lists and maps as `settings.valueItemCount`, and empty
 values as `—`. Activating an item closes the popover and jumps to the entry (SSU-9b scroll
 and highlight), leaving search mode if the entry is not in the results.
+
+The classification rules editor is one setting entry for the change count and popover.
+A reordered list MUST appear as changed under SSU-20e even when the counts are equal.
 
 SSU-21a. `Discard` sets `localSettings` and the suffix rows to `null` without an API call,
 clears inline errors and raw `NumberField` text, and returns the rendered values to the last
@@ -342,6 +376,9 @@ SSU-22. Save behavior:
 2. If the draft makes a change listed in SSU-22a, open the confirm dialog of SSU-22a. The
    remaining steps run only after confirmation.
 3. Drop `global_model_redirects` entries whose `pattern` or `replace` trims to empty.
+   Normalize classification rules under SSU-20e. If any rule is invalid, do not send
+   the request. If the list is dirty, send the entire normalized ordered list in step 4,
+   including `[]` when every rule was removed.
 4. Build a partial body with exactly the top-level keys whose value (after step 3) differs
    from the server snapshot by deep equality, excluding `updated_at`, and send it with
    `PUT /api/dashboard/settings` through `patchSettingsOptimistic` (optimistic SWR merge).
@@ -400,6 +437,15 @@ when that field is omitted. The former
 `monoize_active_probe_enabled` switch is removed from the page, API, and storage.
 Do not interpret that key in a `PUT` payload or reseed it on startup (CFG-4, ISM4.11b).
 
+SSU-26b. `GET /api/dashboard/settings` MUST return the effective
+`monoize_failure_classification_rules` array defined by CFG-4b. Reading or initializing
+settings MUST NOT turn the never-saved default into a saved list. A `PUT` that omits the
+field MUST preserve the existing state, including never-saved. A `PUT` that includes the
+field MUST validate it before applying any update and replace the entire list with the
+normalized array on success. An explicit `[]` MUST be stored and returned as `[]`.
+The successful response MUST return the effective list. A successful mutation MUST
+invalidate routing health under R-H-9.
+
 SSU-27. Invalid `PUT /api/dashboard/settings` values MUST return HTTP 400 with code
 `invalid_request` and `param` naming the offending field:
 
@@ -411,7 +457,20 @@ SSU-27. Invalid `PUT /api/dashboard/settings` values MUST return HTTP 400 with c
 | rule `i` of `global_model_redirects` is invalid (0-based, in the request body) | `global_model_redirects[i].pattern`, or `global_model_redirects[i].replace` when only `replace` is blank |
 | `tool_prices` is invalid | `tool_prices` |
 | `recharge_public_origin` is invalid | `recharge_public_origin` |
+| `monoize_failure_classification_rules` is not an array or contains more than 100 rules | `monoize_failure_classification_rules` |
+| Classification rule `i` is not an object | `monoize_failure_classification_rules[i]` |
+| Rule `i` has a missing or non-array `status_codes` | `monoize_failure_classification_rules[i].status_codes` |
+| Status entry `j` is not an integer in `100..=599` | `monoize_failure_classification_rules[i].status_codes[j]` |
+| Rule `i` has a missing or non-string `keyword`, or the trimmed keyword is empty or longer than 200 Unicode scalar values | `monoize_failure_classification_rules[i].keyword` |
+| Rule `i` has a missing or unsupported `class` | `monoize_failure_classification_rules[i].class` |
+
+Classification rule and status indices in `param` are zero-based indices in the submitted
+body, before normalization. Reject the entire update, including unrelated submitted fields,
+when classification rule validation fails.
 
 SSU-28. The page resolves `param` to an entry by exact entry id or API field name.
 `global_model_redirects[i].*` resolves to `global_model_redirects` and row `i` of the rules
 sent, mapped back to the draft row (SSU-22 step 3 removes blank rows before sending).
+`monoize_failure_classification_rules[i]` and its subpaths resolve to the rules editor,
+row `i`, and the named input when present. A status item index focuses the status-code
+input for the row.

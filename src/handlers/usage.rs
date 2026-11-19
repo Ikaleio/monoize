@@ -331,7 +331,15 @@ pub(crate) async fn record_stream_terminal_error(
     event: &str,
     error: StreamTerminalError,
 ) {
-    record_stream_upstream_terminal_error(runtime_metrics, event, error, None, None).await;
+    record_stream_upstream_terminal_error(
+        runtime_metrics,
+        event,
+        error,
+        None,
+        None,
+        crate::upstream::UpstreamErrorFields::default(),
+    )
+    .await;
 }
 
 pub(crate) async fn record_stream_upstream_terminal_error(
@@ -340,6 +348,7 @@ pub(crate) async fn record_stream_upstream_terminal_error(
     error: StreamTerminalError,
     code: Option<&str>,
     error_type: Option<&str>,
+    reported_error: crate::upstream::UpstreamErrorFields,
 ) {
     let Some(runtime_metrics) = runtime_metrics.as_ref() else {
         return;
@@ -351,6 +360,7 @@ pub(crate) async fn record_stream_upstream_terminal_error(
         .filter(|value| Some(*value) != error.error_type.as_deref())
         .map(str::to_owned);
     guard.terminal.terminal_event = Some(event.to_string());
+    guard.terminal.reported_error = reported_error;
     guard.terminal.terminal_error = Some(error);
 }
 

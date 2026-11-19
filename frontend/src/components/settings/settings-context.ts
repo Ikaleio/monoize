@@ -1,10 +1,12 @@
 import { createContext, useContext } from "react";
+import type { ClassificationRuleLocation } from "./failure-classification-rows";
 
 export interface SettingsFieldError {
   entryId: string;
   message: string;
   /** Draft row of `global_model_redirects` the error belongs to. */
   redirectIndex?: number;
+  classificationRule?: ClassificationRuleLocation;
 }
 
 export interface SettingsRowState {

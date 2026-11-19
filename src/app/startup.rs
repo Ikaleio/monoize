@@ -109,16 +109,6 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
     }
 
     let monoize_runtime = Arc::new(tokio::sync::RwLock::new(monoize_runtime));
-    if is_replica {
-        // E3: fixed-interval, single-row epoch poll driving snapshot rebuilds.
-        crate::replica::poll::spawn_config_epoch_poller(
-            db.clone(),
-            settings_store.clone(),
-            monoize_runtime.clone(),
-            custom_transform_store.clone(),
-            runtime.node.config_poll_interval,
-        );
-    }
     let request_capture = RequestCaptureStore::new(&runtime.database_dsn)
         .with_db(db.clone())
         .with_runtime(monoize_runtime.clone());
@@ -174,6 +164,12 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
         request_capture,
         trusted_proxies,
     };
+    if is_replica {
+        crate::replica::poll::spawn_config_epoch_poller(
+            state.clone(),
+            state.node.config_poll_interval,
+        );
+    }
     // PRP11: replicas never run the active-probe scheduler.
     if let Some(user_id) = active_probe_user_id {
         ActiveProbeScheduler {

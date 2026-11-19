@@ -41,9 +41,15 @@ description: 解決認證、路由、計費和串流傳輸的常見錯誤。
 
 用戶端收到最後一次上游的狀態碼和錯誤碼，例如 `429 rate_limit_exceeded`。`stream: true` 時同樣如此。檢視日誌行中的失敗嘗試可了解每一跳。如果某次嘗試收到 `2xx` 後才失敗，之後的錯誤會以 HTTP `200` 在串流中傳回。
 
+### 中繼服務傳回 `This API key has no available account`
+
+預設規則比對 HTTP `503` 和關鍵字 `no available account`，將這類錯誤歸為 `persistent`。啟用斷路器後，受影響的 Channel 或模型會立即變為不健康，不必等到失敗次數達到門檻。Monoize 不會重試同一個 Channel，也不會為其他同源 Channel 記錄失敗。
+
+如果規則不符，請在[請求日誌](/zh-TW/docs/request-logs)中查看上游實際傳回的 HTTP 狀態碼和錯誤欄位。檢查儲存的清單是否移除了預設規則，或是否有較前面的規則先符合。遇到其他中繼錯誤訊息時，請開啟[被動熔斷編輯器](/zh-TW/docs/dashboard)。新增一條規則，填入實際狀態碼、上游錯誤中有辨識度的一段文字，以及要套用的類別。將這條規則移到可能符合相同錯誤的寬泛規則之前。儲存清單。
+
 ### OpenAI Platform 傳回 `credit_balance_exhausted` 或 `insufficient_quota`
 
-Channel 的 API 金鑰所屬的 OpenAI Platform 帳戶已用完額度。OpenAI 可能傳回 HTTP `429`，也可能先送出 HTTP `200` 回應標頭，再在串流中回報錯誤。Monoize 將這兩種情況都視為持續性故障。啟用斷路器時，Channel 或受影響的模型會立即變為不健康。
+Channel 的 API 金鑰所屬的 OpenAI Platform 帳戶已用完額度。OpenAI 可能傳回 HTTP `429`，也可能先送出 HTTP `200` 回應標頭，再在串流中回報錯誤。Monoize 預設將這兩種情況都視為持續性故障。啟用斷路器時，持續性故障會立即讓 Channel 或受影響的模型變為不健康。
 
 在 OpenAI Platform 儲值。等候主動探測通過，或對受影響的模型執行 [Channel 測試](/zh-TW/docs/dashboard/providers-and-channels)。測試通過後，健康狀態會立即恢復。複本節點上的 Channel 也可以在定時復原的等候時間結束後恢復健康。
 

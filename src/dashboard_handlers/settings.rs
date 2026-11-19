@@ -29,6 +29,8 @@ pub struct UpdateSettingsRequest {
     pub dashboard_performance_group_ids: Option<Vec<String>>,
     pub dashboard_performance_model_ids: Option<Vec<String>>,
     pub monoize_honor_rate_limit: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present_json")]
+    pub monoize_failure_classification_rules: Option<serde_json::Value>,
     pub monoize_active_probe_interval_seconds: Option<u64>,
     pub monoize_active_probe_success_threshold: Option<u32>,
     #[serde(
@@ -112,6 +114,12 @@ pub async fn get_settings(
     Ok(Json(settings))
 }
 
+fn deserialize_present_json<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 pub async fn update_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -144,10 +152,11 @@ pub async fn update_settings(
         settings.monoize_active_probe_stream,
     );
 
+    let save_classification_rules = body.monoize_failure_classification_rules.is_some();
     apply_settings_update(&mut settings, body)?;
 
     let mut updated = settings_store
-        .update_all(&settings)
+        .update_all(&settings, save_classification_rules)
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", e))?;
 
@@ -169,16 +178,17 @@ pub async fn update_settings(
         updated.monoize_active_probe_stream,
     );
     let affinity_changed = affinity_settings_before != affinity_settings_after;
-    let health_changed = health_settings_before != health_settings_after;
+    let health_changed =
+        save_classification_rules || health_settings_before != health_settings_after;
     if affinity_changed || health_changed {
         let mut health = state.channel_health.lock().await;
-        publish_runtime_settings(&state, &updated).await;
+        publish_runtime_settings(&state, &updated, save_classification_rules).await;
         state.routing_config_revision.fetch_add(1, Ordering::AcqRel);
         if health_changed {
             health.clear();
         }
     } else {
-        publish_runtime_settings(&state, &updated).await;
+        publish_runtime_settings(&state, &updated, false).await;
     }
     if affinity_changed {
         state.channel_affinity.lock().await.clear();
@@ -342,6 +352,15 @@ fn apply_settings_update(
     if let Some(v) = body.monoize_honor_rate_limit {
         settings.monoize_honor_rate_limit = v;
     }
+    if let Some(value) = body.monoize_failure_classification_rules {
+        settings.monoize_failure_classification_rules =
+            crate::settings::parse_failure_classification_rules(&value).map_err(
+                |(path, message)| {
+                    AppError::new(StatusCode::BAD_REQUEST, "invalid_request", message)
+                        .with_param(path)
+                },
+            )?;
+    }
     if let Some(v) = body.monoize_active_probe_interval_seconds {
         settings.monoize_active_probe_interval_seconds = v.max(1);
     }
@@ -446,7 +465,11 @@ fn apply_settings_update(
     Ok(())
 }
 
-async fn publish_runtime_settings(state: &AppState, updated: &crate::settings::SystemSettings) {
+async fn publish_runtime_settings(
+    state: &AppState,
+    updated: &crate::settings::SystemSettings,
+    save_classification_rules: bool,
+) {
     let mut rt = state.monoize_runtime.write().await;
     rt.request_timeout_ms = updated.monoize_request_timeout_ms.max(1);
     rt.stream_idle_timeout_ms = updated.monoize_stream_idle_timeout_ms.max(1);
@@ -457,6 +480,11 @@ async fn publish_runtime_settings(state: &AppState, updated: &crate::settings::S
     rt.passive_rate_limit_cooldown_seconds =
         updated.monoize_passive_rate_limit_cooldown_seconds.max(1);
     rt.honor_rate_limit = updated.monoize_honor_rate_limit;
+    if save_classification_rules {
+        rt.failure_classification_rules = crate::settings::CompiledFailureRules::new(
+            updated.monoize_failure_classification_rules.clone(),
+        );
+    }
     rt.active_interval_seconds = updated.monoize_active_probe_interval_seconds.max(1);
     rt.active_success_threshold = updated.monoize_active_probe_success_threshold.max(1);
     rt.active_probe_model = updated.monoize_active_probe_model.clone();

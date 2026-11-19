@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::settings::RetryableFailureClass;
 use attempts::*;
 use billing::*;
 use helpers::*;
@@ -818,6 +819,7 @@ struct MonoizeAttempt {
     recovery_mode: crate::monoize_routing::RecoveryMode,
     channel_max_retries: i32,
     channel_retry_interval_ms: u64,
+    failure_classification_rules: crate::settings::CompiledFailureRules,
     circuit_breaker_enabled: bool,
     per_model_circuit_break: bool,
     provider_attempt_limit: Option<usize>,
@@ -1069,6 +1071,10 @@ pub(crate) struct StreamTerminalDiagnostics {
     upstream_error_code: Option<String>,
     #[serde(skip)]
     upstream_error_type: Option<String>,
+    #[serde(skip)]
+    reported_error: upstream::UpstreamErrorFields,
+    #[serde(skip)]
+    upstream_response: upstream::FailureResponse,
 }
 
 impl StreamTerminalDiagnostics {
@@ -1084,9 +1090,24 @@ impl StreamTerminalDiagnostics {
         )
     }
 
-    fn failure_class(&self, status: u16) -> Option<RetryableFailureClass> {
-        let (code, error_type) = self.upstream_error_fields();
-        classify_channel_health_failure(Some(status), code, error_type)
+    fn failure_class(
+        &self,
+        rules: &crate::settings::CompiledFailureRules,
+        built_in_status: u16,
+    ) -> Option<RetryableFailureClass> {
+        self.reported_error
+            .classify(rules, self.upstream_response.status())
+            .or_else(|| {
+                let (code, error_type) = self.upstream_error_fields();
+                classify_channel_health_failure(Some(built_in_status), code, error_type)
+            })
+    }
+
+    fn apply_failure_evidence(&mut self, error: &mut AppError) {
+        error.actual_upstream_status = self.upstream_response.status();
+        if self.reported_error.is_reported() {
+            error.reported_error = std::mem::take(&mut self.reported_error);
+        }
     }
 }
 

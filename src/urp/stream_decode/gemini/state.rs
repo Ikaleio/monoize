@@ -511,6 +511,7 @@ impl<'a> GeminiStreamState<'a> {
             },
             error.get("code").and_then(Value::as_str),
             error.get("type").and_then(Value::as_str),
+            crate::upstream::UpstreamErrorFields::from_json(error),
         )
         .await;
         AppError::new(StatusCode::BAD_GATEWAY, code, message)

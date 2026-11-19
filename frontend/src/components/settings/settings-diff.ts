@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 
 import type { ModelRedirectRule, SystemSettings } from "@/lib/api";
+import type { ClassificationRuleLocation, ParsedClassificationDraft } from "./failure-classification-rows";
 import {
   SETTING_ENTRIES,
   SETTINGS_CATEGORIES,
@@ -116,12 +117,16 @@ export function diffSettings(
   server: SystemSettings,
   draft: SystemSettings,
   suffixRowCount: number | null,
+  classificationDraft: ParsedClassificationDraft | null,
   t: TFunction
 ): SettingChange[] {
   const changes: SettingChange[] = [];
   for (const entry of ENTRIES) {
     const before = normalizedValue(entry, server);
-    const after = normalizedValue(entry, draft);
+    const classification = entry.id === "monoize_failure_classification_rules";
+    const after = classification
+      ? [classificationDraft?.rules ?? server.monoize_failure_classification_rules]
+      : normalizedValue(entry, draft);
     const label = settingEntryLabel(entry, t);
     const entryId = entry.id as SettingEntryId;
     if (entry.id === "reasoning_suffix_map" && suffixRowCount !== null) {
@@ -134,6 +139,15 @@ export function diffSettings(
           newValue: t("settings.valueItemCount", { count: suffixRowCount }),
         });
       }
+      continue;
+    }
+    if (classification && classificationDraft && classificationDraft.rules === null) {
+      changes.push({
+        entryId,
+        label,
+        oldValue: formatValue(entry, before, t),
+        newValue: t("settings.valueItemCount", { count: classificationDraft.rowCount }),
+      });
       continue;
     }
     if (!isDeepEqual(before, after)) {
@@ -182,6 +196,7 @@ export interface ResolvedSettingParam {
   entryId: SettingEntryId;
   /** Row in the rules sent to the server, when the param names a redirect rule. */
   redirectIndex?: number;
+  classificationRule?: ClassificationRuleLocation;
 }
 
 /** SSU-28: maps a backend `param` to the entry that edits it. */
@@ -189,6 +204,17 @@ export function resolveSettingParam(param: string): ResolvedSettingParam | null 
   const redirect = /^global_model_redirects\[(\d+)\]/.exec(param);
   if (redirect) {
     return { entryId: "global_model_redirects", redirectIndex: Number(redirect[1]) };
+  }
+  const classification = /^monoize_failure_classification_rules\[(\d+)\](?:\.(status_codes|keyword|class)(?=$|\[))?/.exec(param);
+  if (classification) {
+    const field = classification[2];
+    return {
+      entryId: "monoize_failure_classification_rules",
+      classificationRule: {
+        index: Number(classification[1]),
+        field: field === "status_codes" || field === "keyword" || field === "class" ? field : undefined,
+      },
+    };
   }
   const entry = ENTRIES.find((item) => item.id === param || item.fields.includes(param));
   return entry ? { entryId: entry.id as SettingEntryId } : null;

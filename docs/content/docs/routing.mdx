@@ -35,9 +35,9 @@ Monoize tries routes in nested order: Channels inside a Provider first, then the
 
 | Error | Same-Channel retry | Advance to next route |
 | --- | --- | --- |
-| HTTP `408`, `429`, `5xx` without a persistent failure | Yes | Yes, after Channel budget |
+| HTTP `408`, `429`, `5xx` not classified as persistent by either the built-in rules or the final classification | Yes | Yes, after Channel budget |
 | Timeout, connection refused or reset | Yes | Yes, after Channel budget |
-| Persistent upstream failure, including billing exhaustion | No | Yes, at once |
+| Persistent upstream failure under either classification | No | Yes, at once |
 | Other upstream errors (for example `400`, `401`, `404`) | No | Yes, at once |
 | Target-capability failure (the upstream protocol cannot represent the request's media) | No | Yes, at once |
 | Other Monoize errors (for example, authentication, balance, request validation, request encoding, or billing) | No | No; routing stops |
@@ -62,7 +62,42 @@ The dashboard shows three Channel health states:
 
 With the circuit breaker on, a persistent failure makes the Channel unhealthy immediately. Transient and rate-limit failures count toward a threshold of three failures in 30 seconds by default. If `per_model_circuit_break` is on, Monoize tracks health separately for each model in the Channel. An unhealthy model does not block traffic for other models in that Channel.
 
-Monoize treats upstream billing exhaustion as a persistent failure, even if the upstream returns HTTP `429`. The error code or type can be `insufficient_quota`, `credit_balance_exhausted`, `credit_balance_too_low`, `insufficient_balance`, or `billing_hard_limit_reached`. Monoize does not retry the same Channel after a persistent failure. Other HTTP `429` errors, including `quota_exceeded`, remain rate-limit failures.
+### Failure classification
+
+Monoize checks `monoize_failure_classification_rules` in list order before it applies its built-in classification. The first matching rule sets the final class. The rules apply to upstream errors in forwarding, automatic probes, and Channel tests. They include HTTP errors and errors that the upstream reports in a successful HTTP response body or stream. The rules do not match local errors or transport failures.
+
+A rule matches only when both fields match:
+
+- `status_codes`: the actual upstream HTTP status must appear in the list. An error inside an HTTP `200` stream still has status `200` for this check. An empty list matches any status, including upstream errors with no HTTP status.
+- `keyword`: the trimmed keyword must appear anywhere in at least one upstream error field: `message`, `code`, or `type`. Monoize compares each field separately, without regard to case. It uses Unicode simple lowercase without locale-specific rules or normalization.
+
+If you have never saved this setting, Monoize uses these rules in order:
+
+| `status_codes` | `keyword` | `class` |
+| --- | --- | --- |
+| `[503]` | `no available account` | `persistent` |
+| `[]` | `no credits remaining` | `persistent` |
+
+A saved list replaces both defaults. Save an empty list to use only the built-in classification. Edit the list in [System Settings](/en/docs/dashboard).
+
+If no rule matches, Monoize uses the first matching built-in rule. It trims whitespace from the upstream error `code` and `type` and compares them without regard to ASCII case.
+
+1. `persistent`: Billing exhaustion, including on HTTP `429`. The signals are `insufficient_quota`, `credit_balance_exhausted`, `credit_balance_too_low`, `insufficient_balance`, and `billing_hard_limit_reached`.
+2. `rate_limited`: Any other HTTP `429`, including a `429` with `quota_exceeded`.
+3. `persistent`: HTTP `401`, `402`, `403`, `404`, `405`, `407`, `410`, `415`, or `451`.
+4. `rate_limited`: `rate_limit_error`, `rate_limit_exceeded`, or `too_many_requests`.
+5. `persistent`: `account_deactivated`, `account_suspended`, `authentication_error`, `deployment_not_found`, `invalid_api_key`, `model_not_found`, `model_not_supported`, `no_available_account`, `permission_denied`, `quota_exceeded`, or `unsupported_model`.
+6. `transient`: HTTP `408`, HTTP `5xx`, or `overloaded_error`, `server_error`, `service_unavailable`, or `temporarily_unavailable`. Timeouts and connection failures also count as transient failures.
+
+The final class controls the effect on an enabled breaker during forwarding:
+
+| Final class | Passive health | Same-Channel retry | Failure samples for other Channels |
+| --- | --- | --- | --- |
+| `persistent` | Trips immediately | Never | None |
+| `rate_limited` | Counts toward the threshold. If it trips, the honor-rate-limit setting controls the wait. | Only if the built-in retry rules allow it | None |
+| `transient` | Counts toward the threshold | Only if the built-in retry rules allow it | May add a sample to eligible Channels with the same origin in the same Provider |
+
+Only a retryable transient HTTP `502`, `503`, or `524` error response can affect other Channels. An error inside a stream does not. Channels share an origin when their base URLs have the same scheme, host, and port. A rule can make an HTTP `400` count toward health, but cannot make it retryable. No rule can add a retry that the built-in rules disallow.
 
 ### Probe recovery on the primary
 
@@ -93,7 +128,7 @@ Replicate Channels on any node and all Channels on replica nodes use timed recov
 
 `monoize_honor_rate_limit` defaults to `false`. Set `honor_rate_limit_override` on a Provider or Channel to override it. Monoize uses the first non-null value in this order: Channel, Provider, global. Set an override to `false` to turn the setting off rather than inherit it.
 
-When enabled, a trip caused by a rate-limit failure uses the rate-limit cooldown instead of the normal wait. This applies before the first probe or timed recovery. Billing-exhaustion errors do not use this rule, even with HTTP `429`. The rate-limit cooldown defaults to 15 seconds. Set it with `monoize_passive_rate_limit_cooldown_seconds` globally or `passive_rate_limit_cooldown_seconds_override` on a Channel.
+When enabled, a trip caused by a failure classified as `rate_limited` uses the rate-limit cooldown instead of the normal wait. This applies before the first probe or timed recovery. The rate-limit cooldown defaults to 15 seconds. Set it with `monoize_passive_rate_limit_cooldown_seconds` globally or `passive_rate_limit_cooldown_seconds_override` on a Channel.
 
 If the upstream sends a longer valid `Retry-After`, Monoize uses that value. Monoize caps the parsed header value at 3600 seconds before comparing it with the cooldown. A valid `retry-after-ms` takes precedence over `Retry-After` and rounds up to whole seconds. A rate-limited probe also uses this rule, based on its own response. When the setting is off, rate-limit errors use the normal probe interval or timed recovery wait.
 

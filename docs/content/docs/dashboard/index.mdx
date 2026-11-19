@@ -60,6 +60,19 @@ The window ends at the current time. The window does not reset at midnight.
 The save bar shows the number of unsaved changes. Select **View changes** to compare old and new values.
 Monoize asks for confirmation before it saves a high-risk change. High-risk changes affect security, billing, or privacy.
 
+### Edit failure classification rules
+
+Open **System Settings → Routing & Reliability → Passive Breaker**. Use the `monoize_failure_classification_rules` editor to classify upstream errors before the built-in rules. The first matching rule wins.
+
+1. Add a rule at the end of the list.
+2. Enter comma-separated HTTP status codes from `100` through `599`. Leave the field blank to match any status.
+3. Enter a keyword of 1 to 200 Unicode scalar values, excluding leading and trailing whitespace. Monoize checks the upstream error message, code, and type without regard to case.
+4. Select `persistent`, `rate_limited`, or `transient`.
+5. Move rules up or down to set their priority. Remove any rules you do not need.
+6. Save the list. You can save up to 100 rules.
+
+Invalid rule input prevents the update from saving. A saved list replaces the default list. Remove every row and save to use only the built-in rules. Saving a changed list clears the recorded Channel health state. See [Routing and Reliability](/en/docs/routing) for the defaults and the effect of each class.
+
 ## Language
 
 The dashboard supports English, 简体中文, 繁體中文, and 日本語. Change the language from the user menu.

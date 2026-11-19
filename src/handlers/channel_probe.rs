@@ -6,6 +6,7 @@ pub(crate) struct ProbeRequestSettings {
     global_transforms: Vec<TransformRuleConfig>,
     extra_fields_whitelist: HashMap<String, Vec<String>>,
     strip_cross_protocol_nested_extra: bool,
+    failure_classification_rules: crate::settings::CompiledFailureRules,
 }
 
 impl From<&MonoizeRuntimeConfig> for ProbeRequestSettings {
@@ -14,6 +15,7 @@ impl From<&MonoizeRuntimeConfig> for ProbeRequestSettings {
             global_transforms: runtime.global_transforms.clone(),
             extra_fields_whitelist: runtime.extra_fields_whitelist.clone(),
             strip_cross_protocol_nested_extra: runtime.strip_cross_protocol_nested_extra,
+            failure_classification_rules: runtime.failure_classification_rules.clone(),
         }
     }
 }
@@ -92,6 +94,7 @@ pub(crate) struct PreparedProbe {
     request: reqwest::RequestBuilder,
     completion: Option<urp::UrpRequest>,
     provider_type: ProviderType,
+    failure_classification_rules: crate::settings::CompiledFailureRules,
 }
 
 impl PreparedProbe {
@@ -145,13 +148,19 @@ impl PreparedProbe {
             })?;
         let status = response.status();
         meta.status = Some(status);
-        meta.retry_after_seconds = upstream::parse_retry_after(response.headers(), now_ts());
+        let upstream_response = upstream::FailureResponse::from_http(&response);
+        meta.retry_after_seconds = upstream_response.retry_after_seconds();
+        let rules = &self.failure_classification_rules;
         if !status.is_success() {
             let (body, timed_out) = upstream::read_http_error_body(response).await;
             meta.timed_out = timed_out;
             let info = serde_json::from_str::<Value>(&body)
                 .ok()
-                .map(|value| upstream::extract_error_members(body_error_object(&value)))
+                .map(|value| {
+                    let error = upstream::reported_error_object(&value);
+                    meta.failure_class = classify_reported_probe_error(rules, status, error);
+                    upstream::extract_error_members(error)
+                })
                 .unwrap_or_default();
             return Err(ProbeFailure {
                 code: info.code,
@@ -166,7 +175,9 @@ impl PreparedProbe {
                 req,
                 response,
                 timeout_ms,
-                &mut meta.stream_failure_class,
+                &mut meta.failure_class,
+                rules,
+                upstream_response,
             )
             .await;
         }
@@ -197,8 +208,17 @@ impl PreparedProbe {
         if let Some(req) = self.completion.as_ref() {
             let decoded =
                 decode_response_from_provider(self.provider_type, &value, &req.model, false, req)
-                    .map_err(|err| ProbeFailure::from_decode_error(err, signals))?;
-            if let Some(failure) = terminal_outcome_failure(decoded.outcome, signals) {
+                    .map_err(|err| {
+                    meta.failure_class = err.reported_error.classify(rules, Some(status.as_u16()));
+                    ProbeFailure::from_decode_error(err, signals)
+                })?;
+            if let Some(failure) = terminal_outcome_failure(
+                decoded.outcome,
+                signals,
+                rules,
+                status.as_u16(),
+                &mut meta.failure_class,
+            ) {
                 return Err(failure);
             }
             if classify_channel_health_failure(None, signals.0, signals.1).is_none() {
@@ -207,6 +227,8 @@ impl PreparedProbe {
         } else if classify_channel_health_failure(None, signals.0, signals.1).is_none() {
             return Ok(extract_native_usage(&value));
         }
+        meta.failure_class =
+            classify_reported_probe_error(rules, status, upstream::reported_error_object(&value));
         Err(ProbeFailure {
             code: signals.0.map(str::to_owned),
             error_type: signals.1.map(str::to_owned),
@@ -325,6 +347,7 @@ pub(crate) async fn prepare_channel_probe(
         request,
         completion,
         provider_type,
+        failure_classification_rules: settings.failure_classification_rules.clone(),
     })
 }
 
@@ -334,8 +357,10 @@ async fn decode_probe_stream(
     response: reqwest::Response,
     timeout_ms: u64,
     failure_class: &mut Option<RetryableFailureClass>,
+    rules: &crate::settings::CompiledFailureRules,
+    upstream_response: upstream::FailureResponse,
 ) -> Result<Option<urp::Usage>, ProbeFailure> {
-    let status = response.status().as_u16();
+    let response_status = response.status().as_u16();
     let legacy = typed_request_to_legacy(req, None);
     let pending_extra = find_pending_request_envelope_extra(&req.input);
     let (tx, mut rx) = mpsc::channel(16);
@@ -382,8 +407,9 @@ async fn decode_probe_stream(
     let (decoded, (terminal, event_error)) = tokio::join!(decode, read);
     let diagnostic = {
         let mut metrics = metrics.lock().await;
+        metrics.terminal.upstream_response = upstream_response;
         if metrics.terminal.terminal_error.is_some() {
-            *failure_class = metrics.terminal.failure_class(status);
+            *failure_class = metrics.terminal.failure_class(rules, response_status);
         }
         metrics.terminal.terminal_error.take()
     };
@@ -405,7 +431,9 @@ async fn decode_probe_stream(
             "upstream stream ended without a terminal response event".to_owned(),
         )
     })?;
-    if let Some(error) = terminal_outcome_failure(outcome, (None, None)) {
+    if let Some(error) =
+        terminal_outcome_failure(outcome, (None, None), rules, response_status, failure_class)
+    {
         return Err(error);
     }
     Ok(usage)
@@ -414,6 +442,9 @@ async fn decode_probe_stream(
 fn terminal_outcome_failure(
     outcome: Option<urp::ResponseOutcome>,
     signals: (Option<&str>, Option<&str>),
+    rules: &crate::settings::CompiledFailureRules,
+    http_status: u16,
+    failure_class: &mut Option<RetryableFailureClass>,
 ) -> Option<ProbeFailure> {
     let outcome = outcome?;
     if outcome.error.is_none()
@@ -425,6 +456,11 @@ fn terminal_outcome_failure(
         return None;
     }
     let (code, error_type, message) = outcome.error.map_or((None, None, None), |error| {
+        let kind = error.extra_body.get("type").and_then(Value::as_str);
+        *failure_class = rules.classify(
+            Some(http_status),
+            [error.message.as_deref(), error.code.as_deref(), kind],
+        );
         let error_type = error
             .extra_body
             .get("type")
@@ -445,7 +481,7 @@ fn terminal_outcome_failure(
 
 #[derive(Default)]
 struct ProbeResponse {
-    stream_failure_class: Option<RetryableFailureClass>,
+    failure_class: Option<RetryableFailureClass>,
     timed_out: bool,
     status: Option<StatusCode>,
     retry_after_seconds: Option<u16>,
@@ -467,7 +503,7 @@ impl ProbeResponse {
         match result {
             Ok(usage) => outcome.usage = usage,
             Err(failure) => {
-                outcome.failure_class = self.stream_failure_class.or_else(|| {
+                outcome.failure_class = self.failure_class.or_else(|| {
                     classify_channel_health_failure(
                         Some(outcome.http_status?),
                         failure.code.as_deref(),
@@ -503,7 +539,7 @@ fn format_probe_http_error(status: StatusCode, body: &str) -> String {
 }
 
 fn body_error_signals(body: &Value) -> (Option<&str>, Option<&str>) {
-    let error = body_error_object(body);
+    let error = upstream::reported_error_object(body);
     let member = |key| {
         error
             .get(key)
@@ -513,10 +549,15 @@ fn body_error_signals(body: &Value) -> (Option<&str>, Option<&str>) {
     (member("code"), member("type"))
 }
 
-fn body_error_object(body: &Value) -> &Value {
-    body.get("error")
-        .filter(|error| error.is_object())
-        .unwrap_or(body)
+fn classify_reported_probe_error(
+    rules: &crate::settings::CompiledFailureRules,
+    status: StatusCode,
+    raw: &Value,
+) -> Option<RetryableFailureClass> {
+    rules.classify(
+        Some(status.as_u16()),
+        ["message", "code", "type"].map(|key| raw.get(key).and_then(Value::as_str)),
+    )
 }
 
 fn extract_native_usage(body: &Value) -> Option<urp::Usage> {

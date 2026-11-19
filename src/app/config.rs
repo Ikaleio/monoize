@@ -68,6 +68,11 @@ pub(crate) fn runtime_config_from_settings(
             .monoize_passive_rate_limit_cooldown_seconds
             .max(1),
         honor_rate_limit: settings_snapshot.monoize_honor_rate_limit,
+        failure_classification_rules: crate::settings::CompiledFailureRules::new(
+            settings_snapshot
+                .monoize_failure_classification_rules
+                .clone(),
+        ),
         active_interval_seconds: settings_snapshot
             .monoize_active_probe_interval_seconds
             .max(1),

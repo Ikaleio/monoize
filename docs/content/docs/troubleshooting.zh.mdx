@@ -41,9 +41,15 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 客户端收到最后一次上游的状态码和错误码，例如 `429 rate_limit_exceeded`。`stream: true` 时同样如此。查看日志行中的失败尝试可了解每一跳。如果某次尝试收到 `2xx` 后才失败，之后的错误会以 HTTP `200` 在流中返回。
 
+### 中转服务返回 `This API key has no available account`
+
+默认规则匹配 HTTP `503` 和关键词 `no available account`，将这类错误归为 `persistent`。启用熔断器后，受影响的 Channel 或模型会立即变为不健康，不必等到失败次数达到阈值。Monoize 不会重试同一 Channel，也不会为同源的其他 Channel 记录失败。
+
+如果规则没有匹配，请在[请求日志](/zh/docs/request-logs)中查看上游实际返回的 HTTP 状态码和错误字段。检查已保存的列表是否移除了默认规则，或者是否有位置更靠前的规则先匹配。遇到其他中转错误消息时，请打开[被动熔断编辑器](/zh/docs/dashboard)。添加一条规则，填入实际状态码、上游错误中有辨识度的一段文字和所需类别。将这条规则移到可能匹配同一错误的宽泛规则之前。保存列表。
+
 ### OpenAI Platform 返回 `credit_balance_exhausted` 或 `insufficient_quota`
 
-Channel 的 API 密钥所属的 OpenAI Platform 账户已用完额度。OpenAI 可能返回 HTTP `429`，也可能先发送 HTTP `200` 响应头，再在流中报告错误。Monoize 将这两种情况都视为持久性故障。启用熔断器时，Channel 或受影响的模型会立即变为不健康。
+Channel 的 API 密钥所属的 OpenAI Platform 账户已用完额度。OpenAI 可能返回 HTTP `429`，也可能先发送 HTTP `200` 响应头，再在流中报告错误。Monoize 默认将这两种情况都视为持久性故障。启用熔断器时，持久性故障会立即使 Channel 或受影响的模型变为不健康。
 
 在 OpenAI Platform 充值。等待主动探测通过，或对受影响的模型运行 [Channel 测试](/zh/docs/dashboard/providers-and-channels)。测试通过后，健康状态会立即恢复。副本节点上的 Channel 也可以在定时恢复的等待时间结束后恢复健康。
 

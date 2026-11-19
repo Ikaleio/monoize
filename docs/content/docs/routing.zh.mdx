@@ -35,9 +35,9 @@ Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，
 
 | 错误 | 同 Channel 重试 | 前进到下一路由 |
 | --- | --- | --- |
-| 非持久性故障的 HTTP `408`、`429`、`5xx` | 是 | 是，Channel 预算耗尽后 |
+| 内置分类和最终分类都不是持久性故障的 HTTP `408`、`429`、`5xx` | 是 | 是，Channel 预算耗尽后 |
 | 超时、连接被拒绝或重置 | 是 | 是，Channel 预算耗尽后 |
-| 持久性上游故障，包括上游额度耗尽 | 否 | 是，立即前进 |
+| 内置分类或最终分类为持久性上游故障 | 否 | 是，立即前进 |
 | 其他上游错误（如 `400`、`401`、`404`） | 否 | 是，立即前进 |
 | 上游协议无法表示请求中的媒体内容 | 否 | 是，立即前进 |
 | Monoize 的其他错误（如认证、余额、请求校验、请求编码或计费错误） | 否 | 否；路由终止 |
@@ -62,7 +62,42 @@ Monoize 在第一个上游尝试被接受后发送 SSE 响应头。HTTP 尝试�
 
 启用熔断器后，持久性故障会立即使 Channel 变为不健康。对于暂时性故障和限流错误，默认在 30 秒内累计 3 次失败就会触发熔断。启用 `per_model_circuit_break` 后，Monoize 会分别跟踪 Channel 中各模型的健康状态。某个模型不健康时，不影响同一 Channel 中其他模型接收流量。
 
-即使上游返回 HTTP `429`，Monoize 也会将上游额度耗尽视为持久性故障。此类错误的错误码或类型包括 `insufficient_quota`、`credit_balance_exhausted`、`credit_balance_too_low`、`insufficient_balance` 和 `billing_hard_limit_reached`。遇到持久性故障时，Monoize 不会重试同一 Channel。其他 HTTP `429` 错误仍属于限流，包括 `quota_exceeded`。
+### 故障分类
+
+Monoize 先按列表顺序检查 `monoize_failure_classification_rules`，再执行内置分类。第一条匹配的规则决定最终类别。规则适用于转发、主动探测和 Channel 测试中的上游错误，包括 HTTP 错误以及上游在成功响应的响应体或流中报告的错误。Monoize 自身的错误和传输故障不参与匹配。
+
+规则要求两个字段都匹配：
+
+- `status_codes`：列表必须包含上游实际返回的 HTTP 状态码。HTTP `200` 流中的错误按 `200` 匹配。空列表匹配任意状态码，也包括没有 HTTP 状态码的上游错误。
+- `keyword`：去除首尾空白的关键词必须出现在上游错误的 `message`、`code` 或 `type` 中。Monoize 分别检查每个字段，不区分大小写。比较使用 Unicode 简单小写映射，不按语言环境转换，也不做规范化。
+
+从未保存此设置时，Monoize 按顺序使用以下规则：
+
+| `status_codes` | `keyword` | `class` |
+| --- | --- | --- |
+| `[503]` | `no available account` | `persistent` |
+| `[]` | `no credits remaining` | `persistent` |
+
+保存的列表会替换这两条默认规则。保存空列表可仅使用内置分类。在[系统设置](/zh/docs/dashboard)中编辑列表。
+
+如果没有规则匹配，Monoize 按以下顺序采用第一条匹配的内置规则。比较上游错误的 `code` 和 `type` 时，先去除首尾空白，再忽略 ASCII 字母的大小写。
+
+1. `persistent`：上游额度耗尽，即使返回 HTTP `429`。错误标识包括 `insufficient_quota`、`credit_balance_exhausted`、`credit_balance_too_low`、`insufficient_balance` 和 `billing_hard_limit_reached`。
+2. `rate_limited`：其他 HTTP `429`，包括带有 `quota_exceeded` 的 `429`。
+3. `persistent`：HTTP `401`、`402`、`403`、`404`、`405`、`407`、`410`、`415` 或 `451`。
+4. `rate_limited`：`rate_limit_error`、`rate_limit_exceeded` 或 `too_many_requests`。
+5. `persistent`：`account_deactivated`、`account_suspended`、`authentication_error`、`deployment_not_found`、`invalid_api_key`、`model_not_found`、`model_not_supported`、`no_available_account`、`permission_denied`、`quota_exceeded` 或 `unsupported_model`。
+6. `transient`：HTTP `408`、HTTP `5xx`，或 `overloaded_error`、`server_error`、`service_unavailable`、`temporarily_unavailable`。超时和连接失败也属于暂时性故障。
+
+启用熔断器后，转发失败的最终类别决定熔断行为：
+
+| 最终类别 | 被动熔断 | 重试同一 Channel | 其他 Channel 的失败采样 |
+| --- | --- | --- | --- |
+| `persistent` | 立即熔断 | 不重试 | 不采样 |
+| `rate_limited` | 累计至阈值；触发熔断后，由遵守限流设置决定等待时间 | 仅在内置重试规则允许时 | 不采样 |
+| `transient` | 累计至阈值 | 仅在内置重试规则允许时 | 可能为同一 Provider 中符合条件的同源 Channel 记录一次失败 |
+
+只有可重试的暂时性 HTTP `502`、`503` 或 `524` 错误响应才会影响其他 Channel，流中的错误不会。基址的协议、主机和端口相同即为同源。规则可以让 HTTP `400` 计入健康状态，但不能让它变得可重试。规则不能增加内置规则不允许的重试。
 
 ### 主节点上的探测恢复
 
@@ -93,7 +128,7 @@ Responses、Chat Completions、Messages 和 Gemini 的探测请求起初只包�
 
 `monoize_honor_rate_limit` 默认为 `false`。通过 Provider 或 Channel 的 `honor_rate_limit_override` 覆盖全局设置。Monoize 按 Channel、Provider、全局的顺序，使用第一个非 `null` 值。显式设为 `false` 表示关闭，而不是继承。
 
-开启后，如果触发熔断的是限流错误，首次探测或定时恢复前会改用限流冷却时间。上游额度耗尽不适用此规则，即使返回 HTTP `429`。该时间默认为 15 秒。通过全局设置 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 调整。
+开启后，如果触发熔断的故障最终归类为 `rate_limited`，首次探测或定时恢复前会改用限流冷却时间。该时间默认为 15 秒。通过全局设置 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 调整。
 
 如果上游返回了有效且更长的 `Retry-After`，Monoize 会采用该值。比较前，Monoize 会将从响应头解析出的时长限制在 3600 秒以内。有效的 `retry-after-ms` 优先于 `Retry-After`，并向上取整到秒。如果探测本身受到限流，则根据该次探测的响应应用同一规则。关闭此设置时，限流错误仍使用常规探测间隔或定时恢复等待时间。
 

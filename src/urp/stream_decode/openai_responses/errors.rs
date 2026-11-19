@@ -103,17 +103,21 @@ pub(super) struct NativeError {
     pub(super) message: String,
     pub(super) extra_body: HashMap<String, Value>,
     pub(super) terminal: StreamTerminalError,
+    pub(super) reported_error: crate::upstream::UpstreamErrorFields,
 }
 
-pub(super) fn native_error(event_name: &str, data: &Value) -> NativeError {
-    let error = if event_name == "response.failed" {
+pub(super) fn native_error(event_name: &str, data: &Value, reported: bool) -> NativeError {
+    let nested_error = if event_name == "response.failed" {
         data.get("response")
             .and_then(|response| response.get("error"))
-            .cloned()
-            .unwrap_or(Value::Null)
     } else {
-        data.get("error").cloned().unwrap_or_else(|| data.clone())
+        data.get("error")
     };
+    let error = nested_error.unwrap_or(if event_name == "response.failed" {
+        &Value::Null
+    } else {
+        data
+    });
     let member = |key: &str| {
         error
             .get(key)
@@ -136,12 +140,22 @@ pub(super) fn native_error(event_name: &str, data: &Value) -> NativeError {
         .filter(|status| (400..=599).contains(status))
         .and_then(|status| u16::try_from(status).ok())
         .unwrap_or(StatusCode::BAD_REQUEST.as_u16());
-    let mut extra_body = wire_extra(&error, &["code", "message"]);
+    let mut extra_body = wire_extra(error, &["code", "message"]);
     extra_body.extend(wire_extra(
         data,
         &["code", "message", "type", "error", "response"],
     ));
     NativeError {
+        reported_error: if !reported {
+            Default::default()
+        } else if let Some(error) = nested_error {
+            crate::upstream::UpstreamErrorFields::from_json(error)
+        } else {
+            crate::upstream::UpstreamErrorFields::from_members(|key| {
+                let value = data.get(key).and_then(Value::as_str)?;
+                (key != "type" || value != event_name).then_some(value)
+            })
+        },
         terminal: StreamTerminalError {
             code: code
                 .clone()

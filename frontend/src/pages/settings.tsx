@@ -40,6 +40,12 @@ import {
 } from "@/components/transforms/transform-schema";
 import { ModelMultiSelect } from "@/components/models/model-multi-select";
 import { ModelRedirectsEditor } from "@/components/settings/model-redirects-editor";
+import {
+  classificationInputId,
+  createClassificationRow,
+  parseClassificationRows,
+  type ClassificationRow,
+} from "@/components/settings/failure-classification-rows";
 import { SuffixMapEditor } from "@/components/settings/suffix-map-editor";
 import {
   duplicateSuffixRowIds,
@@ -112,6 +118,7 @@ export function SettingsPage() {
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
   // SSU-20: draft rows, because blank and duplicate rows cannot be stored in the map.
   const [suffixRows, setSuffixRows] = useState<SuffixRow[] | null>(null);
+  const [classificationRows, setClassificationRows] = useState<ClassificationRow[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [activeCategory, setActiveCategory] = useSearchParamState<SettingsCategoryId>(
     "category",
@@ -127,6 +134,7 @@ export function SettingsPage() {
     id: SettingEntryId;
     focus: boolean;
     transformRuleIndex?: number;
+    focusId?: string;
   } | null>(null);
   const [highlight, setHighlight] = useState<{ id: string } | null>(null);
   const [pendingRisks, setPendingRisks] = useState<HighRiskChange[] | null>(null);
@@ -138,12 +146,22 @@ export function SettingsPage() {
   const serverSuffixMap = currentSettings?.reasoning_suffix_map;
   const initialSuffixRows = useMemo(() => suffixMapToRows(serverSuffixMap), [serverSuffixMap]);
   const renderedSuffixRows = suffixRows ?? initialSuffixRows;
+  const serverClassificationRules = settings?.monoize_failure_classification_rules;
+  const initialClassificationRows = useMemo(
+    () => (serverClassificationRules ?? []).map(createClassificationRow),
+    [serverClassificationRules]
+  );
+  const classificationDraft = useMemo(
+    () => classificationRows && parseClassificationRows(classificationRows),
+    [classificationRows]
+  );
+  const classificationInvalid = classificationDraft?.rules === null;
   const changes = useMemo(
     () =>
-      settings && (localSettings || suffixRows)
-        ? diffSettings(settings, localSettings ?? settings, suffixRows ? suffixRows.length : null, t)
+      settings && (localSettings || suffixRows || classificationDraft)
+        ? diffSettings(settings, localSettings ?? settings, suffixRows ? suffixRows.length : null, classificationDraft, t)
         : [],
-    [settings, localSettings, suffixRows, t]
+    [settings, localSettings, suffixRows, classificationDraft, t]
   );
   const dirty = changes.length > 0;
   const guard = useUnsavedChangesGuard(dirty);
@@ -190,13 +208,14 @@ export function SettingsPage() {
     if (!jump) return;
     const row = document.getElementById(`setting-${jump.id}`);
     if (!row) return;
+    const targetControl = jump.focusId ? document.getElementById(jump.focusId) : null;
     if (jump.transformRuleIndex !== undefined) {
       revealTransformRule("global", jump.transformRuleIndex);
     } else {
-      row.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+      (targetControl ?? row).scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
     }
     if (jump.focus) {
-      row.querySelector<HTMLElement>("input, textarea, button")?.focus({ preventScroll: true });
+      (targetControl ?? row.querySelector<HTMLElement>("input, textarea, button"))?.focus({ preventScroll: true });
     }
     setHighlight({ id: jump.id });
     setJump(null);
@@ -225,10 +244,10 @@ export function SettingsPage() {
     if (entry) setJump({ id: entry.id as SettingEntryId, focus: false });
   }, [settingParam, setSearchParams]);
 
-  const jumpToSetting = (id: SettingEntryId, focus = false, transformRuleIndex?: number) => {
+  const jumpToSetting = (id: SettingEntryId, options: { focus?: boolean; transformRuleIndex?: number; focusId?: string } = {}) => {
     if (search && !search.entryIds.has(id)) setQuery("");
     setActiveCategory(categoryOfGroup(getSettingEntry(id).group));
-    setJump({ id, focus, transformRuleIndex });
+    setJump({ id, focus: false, ...options });
   };
 
   const reportValidity = useCallback((entryId: string, valid: boolean) => {
@@ -265,15 +284,21 @@ export function SettingsPage() {
     handleChange({ reasoning_suffix_map: suffixRowsToMap(rows) });
   };
 
+  const handleClassificationRowsChange = (rows: ClassificationRow[]) => {
+    setClassificationRows(rows);
+    setFieldError(null);
+  };
+
   const resetDraft = () => {
     setLocalSettings(null);
     setSuffixRows(null);
+    setClassificationRows(null);
     setFieldError(null);
     setDraftGeneration((generation) => generation + 1);
   };
 
   const persist = async () => {
-    if (!currentSettings || !settings) return;
+    if (!currentSettings || !settings || classificationInvalid) return;
     setSaving(true);
     // SSU-28: the server indexes the rules it received, not the draft rows.
     const sentRedirectRows = (currentSettings.global_model_redirects ?? []).flatMap((rule, row) =>
@@ -284,6 +309,8 @@ export function SettingsPage() {
       global_model_redirects: (currentSettings.global_model_redirects ?? []).filter(
         (rule) => !isBlankRedirect(rule)
       ),
+      monoize_failure_classification_rules:
+        classificationDraft?.rules ?? settings.monoize_failure_classification_rules,
     });
     try {
       // A draft of only blank rows has nothing to send.
@@ -299,16 +326,20 @@ export function SettingsPage() {
       } else {
         const redirectIndex =
           resolved.redirectIndex === undefined ? undefined : sentRedirectRows[resolved.redirectIndex];
+        const { classificationRule } = resolved;
         const message =
           redirectIndex === undefined
             ? t("settings.invalidSettingValue", {
                 label: settingEntryLabel(getSettingEntry(resolved.entryId), t),
               })
             : t("settings.invalidRedirectRule", { index: redirectIndex + 1 });
-        setFieldError({ entryId: resolved.entryId, message, redirectIndex });
+        setFieldError({ entryId: resolved.entryId, message, redirectIndex, classificationRule });
         toast.error(message);
         // The redirect editor focuses its own row.
-        jumpToSetting(resolved.entryId, redirectIndex === undefined);
+        jumpToSetting(resolved.entryId, {
+          focus: redirectIndex === undefined,
+          focusId: classificationRule && classificationInputId(classificationRule.index, classificationRule.field),
+        });
       }
     } finally {
       setSaving(false);
@@ -316,7 +347,7 @@ export function SettingsPage() {
   };
 
   const handleSave = () => {
-    if (!currentSettings || !settings) return;
+    if (!currentSettings || !settings || classificationInvalid) return;
     const transformRules = currentSettings.global_transforms ?? [];
     const invalidRule = findFirstInvalidTransformRule(transformRules, globalTransformRegistry);
     if (invalidRule) {
@@ -329,7 +360,7 @@ export function SettingsPage() {
       );
       toast.error(message);
       setFieldError({ entryId: "global_transforms", message });
-      jumpToSetting("global_transforms", false, invalidRule.index);
+      jumpToSetting("global_transforms", { transformRuleIndex: invalidRule.index });
       return;
     }
     const risks = highRiskChanges(settings, currentSettings, t);
@@ -428,7 +459,16 @@ export function SettingsPage() {
           </SettingsGroup>
         );
       case "routing":
-        return <RoutingSection settings={currentSettings} onChange={handleChange} />;
+        return (
+          <RoutingSection
+            settings={currentSettings}
+            onChange={handleChange}
+            classificationRows={classificationRows ?? initialClassificationRows}
+            classificationErrors={classificationDraft?.errors}
+            onClassificationChange={handleClassificationRowsChange}
+            saving={saving}
+          />
+        );
       case "billing":
         return <BillingSection settings={currentSettings} onChange={handleChange} />;
       case "privacy":
@@ -455,6 +495,7 @@ export function SettingsPage() {
       const entry = findSettingEntry(fieldError.entryId);
       if (entry) ids.add(categoryOfGroup(entry.group));
     }
+    if (classificationInvalid) ids.add("routing");
     if (
       hasDuplicateSuffix ||
       (currentSettings.global_model_redirects ?? []).some((rule) =>
@@ -466,7 +507,8 @@ export function SettingsPage() {
     return ids;
   })();
   const blockedReason =
-    invalidEntryIds.size > 0 || hasDuplicateSuffix ? t("settings.saveBlockedInvalid") : null;
+    invalidEntryIds.size > 0 || hasDuplicateSuffix || classificationInvalid
+      ? t("settings.saveBlockedInvalid") : null;
 
   let content;
   if (!search) {

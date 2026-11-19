@@ -35,9 +35,9 @@ Monoize はルートを入れ子順で試行します。まず 1 つの Provider
 
 | エラー | 同一 Channel リトライ | 次のルートへ前進 |
 | --- | --- | --- |
-| 恒久的な障害に該当しない HTTP `408`、`429`、`5xx` | あり | あり（Channel の試行回数を使い切った後） |
+| 組み込みの分類でも最終分類でも恒久的な障害に当たらない HTTP `408`、`429`、`5xx` | あり | あり（Channel の試行回数を使い切った後） |
 | タイムアウト、接続拒否・リセット | あり | あり（Channel の試行回数を使い切った後） |
-| クレジット切れなどの恒久的な上流障害 | なし | あり（直ちに前進） |
+| 組み込みの分類または最終分類で恒久的と判定された上流障害 | なし | あり（直ちに前進） |
 | その他の上流エラー（例: `400`、`401`、`404`） | なし | あり（直ちに前進） |
 | 上流プロトコルでリクエスト内のメディアを表現できない | なし | あり（直ちに前進） |
 | その他の Monoize 側のエラー（例: 認証、残高、リクエストの検証やエンコード、課金） | なし | なし（ルーティング終了） |
@@ -62,7 +62,42 @@ Monoize は最初の上流試行が受理された後に SSE レスポンスヘ�
 
 サーキットブレーカーが有効な場合、恒久的な障害が起きると Channel は直ちに異常になります。一時的な障害やレート制限エラーの場合、デフォルトでは 30 秒以内に 3 回失敗すると遮断します。`per_model_circuit_break` が有効な場合は、Channel 内のモデルごとに健全性を追跡します。あるモデルが異常でも、同じ Channel の他のモデルへの転送には影響しません。
 
-上流が HTTP `429` を返しても、Monoize はクレジット切れを恒久的な障害として扱います。該当するエラーコードまたは種別は、`insufficient_quota`、`credit_balance_exhausted`、`credit_balance_too_low`、`insufficient_balance`、`billing_hard_limit_reached` です。恒久的な障害では、同じ Channel をリトライしません。`quota_exceeded` を含むその他の HTTP `429` エラーは、レート制限として扱います。
+### 障害の分類
+
+Monoize は組み込みの分類を行う前に、`monoize_failure_classification_rules` をリストの先頭から確認します。最初に一致したルールが最終分類を決めます。対象は、転送、アクティブプローブ、Channel テストで上流が返したエラーです。HTTP エラーのほか、HTTP ステータスが成功でも、本文やストリーム内で上流が報告したエラーを含みます。Monoize 内部のエラーや通信障害は対象外です。
+
+ルールは次の 2 つの条件を両方満たす場合に一致します。
+
+- `status_codes`：上流が実際に返した HTTP ステータスがリストに含まれること。HTTP `200` のストリーム内で起きたエラーは `200` として照合します。空のリストは、HTTP ステータスがない上流エラーを含め、どのステータスにも一致します。
+- `keyword`：前後の空白を除いたキーワードが、上流エラーの `message`、`code`、`type` のいずれかに含まれること。Monoize は各フィールドを個別に照合し、大文字と小文字を区別しません。比較には Unicode の単純小文字マッピングを使い、ロケール固有の変換や正規化は行いません。
+
+この設定を一度も保存していない場合は、次のルールを上から順に使います。
+
+| `status_codes` | `keyword` | `class` |
+| --- | --- | --- |
+| `[503]` | `no available account` | `persistent` |
+| `[]` | `no credits remaining` | `persistent` |
+
+保存したリストは、既定のルール 2 件を置き換えます。組み込みの分類だけを使うには、空のリストを保存してください。リストは[システム設定](/ja/docs/dashboard)で編集できます。
+
+一致するルールがない場合、Monoize は次の組み込みルールのうち、最初に一致するものを使います。上流エラーの `code` と `type` は、前後の空白を取り除き、ASCII の大文字と小文字を区別せずに比較します。
+
+1. `persistent`：HTTP `429` を含むクレジット切れ。識別子は `insufficient_quota`、`credit_balance_exhausted`、`credit_balance_too_low`、`insufficient_balance`、`billing_hard_limit_reached` です。
+2. `rate_limited`：その他の HTTP `429`。`quota_exceeded` を含む HTTP `429` も該当します。
+3. `persistent`：HTTP `401`、`402`、`403`、`404`、`405`、`407`、`410`、`415`、`451` のいずれか。
+4. `rate_limited`：`rate_limit_error`、`rate_limit_exceeded`、`too_many_requests` のいずれか。
+5. `persistent`：`account_deactivated`、`account_suspended`、`authentication_error`、`deployment_not_found`、`invalid_api_key`、`model_not_found`、`model_not_supported`、`no_available_account`、`permission_denied`、`quota_exceeded`、`unsupported_model` のいずれか。
+6. `transient`：HTTP `408`、HTTP `5xx`、または `overloaded_error`、`server_error`、`service_unavailable`、`temporarily_unavailable`。タイムアウトや接続の失敗も一時的な障害として扱います。
+
+サーキットブレーカーが有効な場合、転送失敗時の最終分類によって動作が決まります。
+
+| 最終分類 | パッシブヘルスチェック | 同じ Channel でのリトライ | 他の Channel への失敗の記録 |
+| --- | --- | --- | --- |
+| `persistent` | 即時に遮断 | なし | なし |
+| `rate_limited` | しきい値まで集計。遮断時の待機時間はレート制限に従う設定で決まる | 組み込みのリトライ条件を満たす場合のみ | なし |
+| `transient` | しきい値まで集計 | 組み込みのリトライ条件を満たす場合のみ | 同じ Provider の同一オリジンに属する、条件を満たす Channel に失敗を 1 件記録する場合がある |
+
+他の Channel に影響するのは、リトライ可能な一時的障害で、上流の HTTP エラーレスポンスが `502`、`503`、`524` のいずれかの場合だけです。ストリーム内のエラーは対象外です。ベース URL のスキーム、ホスト、ポートが同じなら、同一オリジンです。ルールで HTTP `400` を健全性の判定対象にはできますが、リトライ可能にはできません。組み込みの条件で許可されないリトライを、ルールで追加することはできません。
 
 ### プライマリノードでのプローブによる復帰
 
@@ -93,7 +128,7 @@ Responses、Chat Completions、Messages、Gemini のプローブでは、`hi` �
 
 `monoize_honor_rate_limit` のデフォルトは `false` です。Provider または Channel の `honor_rate_limit_override` で上書きできます。Monoize は Channel、Provider、グローバルの順に、最初の `null` でない値を使います。上書き項目を明示的に `false` にすると、設定を継承せずに無効にします。
 
-有効にすると、レート制限で遮断した場合に、通常の待機時間の代わりにレート制限用のクールダウンを使います。この待機時間は、初回のプローブまたは待機時間による復帰までに適用されます。クレジット切れには、HTTP `429` が返ってもこのルールを適用しません。レート制限用のクールダウンはデフォルトで 15 秒です。グローバルの `monoize_passive_rate_limit_cooldown_seconds` または Channel の `passive_rate_limit_cooldown_seconds_override` で変更できます。
+有効にすると、最終分類が `rate_limited` の障害で遮断した場合に、通常の待機時間の代わりにレート制限用のクールダウンを使います。この待機時間は、初回のプローブまたは待機時間による復帰までに適用されます。レート制限用のクールダウンはデフォルトで 15 秒です。グローバルの `monoize_passive_rate_limit_cooldown_seconds` または Channel の `passive_rate_limit_cooldown_seconds_override` で変更できます。
 
 上流が有効な `Retry-After` を返し、その値がクールダウンより長い場合は、その値を使います。Monoize は比較前に、ヘッダーから読み取った待機時間を最大 3600 秒に制限します。有効な `retry-after-ms` は `Retry-After` より優先され、秒単位に切り上げます。プローブ自体がレート制限を受けた場合も、そのプローブのレスポンスに同じルールを適用します。この設定が無効な場合、レート制限エラーでも通常のプローブ間隔または復帰までの待機時間を使います。
 

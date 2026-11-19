@@ -131,6 +131,19 @@ CFG-4. Active probes MUST use the Provider circuit-breaker flag and the eligibil
 
 CFG-4a. The global setting `monoize_honor_rate_limit` is boolean and defaults to `false`. A Provider or Channel MAY define `honor_rate_limit_override: boolean | null`. The effective value for a Channel MUST be the first non-null value in this order: Channel override, Provider override, global setting. An explicit `false` is a value, not an inheritance marker.
 
+CFG-4b. The global setting `monoize_failure_classification_rules` is an ordered array of at most `100` rule objects. Each rule has `status_codes: integer[]`, `keyword: string`, and `class: "persistent" | "rate_limited" | "transient"`. Each status code MUST be in `100..=599`. Remove duplicate codes within a rule, preserving the first occurrence. Trim surrounding Unicode whitespace from `keyword`. The trimmed keyword MUST contain `1..=200` Unicode scalar values.
+
+When this setting has never been saved, use exactly the following list in the specified order:
+
+```json
+[
+  { "status_codes": [503], "keyword": "no available account", "class": "persistent" },
+  { "status_codes": [], "keyword": "no credits remaining", "class": "persistent" }
+]
+```
+
+A stored list replaces this default in full. A stored empty list disables custom matching and does not restore the default. A successful mutation MUST invalidate health under `database-provider-routing.spec.md` R-H-9.
+
 CFG-5. Passive breaker effective parameters MUST be resolved per channel with precedence:
 
 1. channel override field (if present and non-null)
@@ -211,7 +224,7 @@ RTA-4. Execute provider with intra-provider retry:
 RTA-4a. Bound-target extra retry. When the current attempt is the request's affinity-hit target (`affinity_hit == true` per AFF-7/AFF-7a), the router MUST allow at most one same-Channel attempt beyond the RTA-4 per-channel limit, so the effective per-channel attempt limit for that attempt is `channel_max_retries + 2`. The extra attempt is authorized if and only if all of the following hold after the most recent failure on that Channel:
 
 1. the failure is same-Channel retryable per RTA-5,
-2. the failure class is Transient under RTA-5a and RTA-5b,
+2. the built-in class is Transient under RTA-5b without step 0, and the final class is not Persistent,
 3. the Channel health state for the request's health key (HSK-1/HSK-2) is still healthy,
 4. no shared-origin skip (RTA-6c step 3) applies to the attempt,
 5. the Provider total attempt budget of RTA-4 is not exhausted.
@@ -221,29 +234,35 @@ The extra attempt consumes the Provider total attempt budget normally and MUST h
 RTA-5. Error policy per attempt:
 
 - Every upstream HTTP, timeout, connection, response-decoding, or response-validation error that occurs before the first downstream byte MUST end the current attempt. Monoize MUST continue routing until an attempt succeeds or all eligible attempts are exhausted.
-- HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, and connection errors MAY retry the same Channel only if the failure is not Persistent under RTA-5a. Same-Channel retries MUST remain within RTA-4 limits.
+- HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, and connection errors MAY retry the same Channel within RTA-4 limits if they would be eligible under the built-in rules and the final failure class under RTA-5b is not Persistent. Step 0 MUST NOT grant any same-Channel retry that would be ineligible without step 0. An override to Persistent prohibits both standard and affinity extra retries.
 - Other upstream errors, including HTTP `400`, `401`, `403`, and `422`, MUST NOT retry the same Channel. They MUST still advance to the next eligible Channel or Provider.
 - A target-capability failure MUST end only the current attempt (RTA-5e).
 - A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error other than RTA-5e MUST stop routing. Monoize MUST NOT classify such an error as an upstream attempt failure.
 
 RTA-5a. Normalize each structured upstream `code` and `type` by removing surrounding whitespace and converting ASCII letters to lowercase. The billing-exhaustion signals are `insufficient_quota`, `credit_balance_exhausted`, `credit_balance_too_low`, `insufficient_balance`, and `billing_hard_limit_reached`.
 
-The Persistent conditions below apply in the order specified by RTA-5b:
+The built-in Persistent conditions below apply in the order specified by RTA-5b after step 0:
 
 1. Either normalized field is a billing-exhaustion signal. This includes HTTP `429` and terminal stream errors carried in HTTP `2xx` responses.
 2. Its status is one of `401`, `402`, `403`, `404`, `405`, `407`, `410`, `415`, `426`, or `451`.
 3. Its status is not `429` and either normalized field is `account_deactivated`, `account_suspended`, `authentication_error`, `deployment_not_found`, `invalid_api_key`, `model_not_found`, `model_not_supported`, `no_available_account`, `permission_denied`, `quota_exceeded`, or `unsupported_model`.
 
-`quota_exceeded` is not a billing-exhaustion signal and MUST NOT override HTTP `429`. A Persistent failure MUST NOT authorize a same-Channel retry, even when the circuit breaker is disabled. Where forwarding fallback is permitted, advance to the next eligible Channel or Provider. HTTP `400`, `409`, and `422` without a listed structured signal are request-specific and MUST NOT be Persistent.
+Under the built-in rules, `quota_exceeded` is not a billing-exhaustion signal and MUST NOT override HTTP `429`. HTTP `400`, `409`, and `422` without a listed structured signal are not Persistent unless step 0 assigns that class. A final Persistent failure MUST NOT authorize a same-Channel retry, even when the circuit breaker is disabled. Where forwarding fallback is permitted, advance to the next eligible Channel or Provider.
 
-RTA-5b. Classify using the first matching rule below. Use the normalized `code` and `type` from RTA-5a. Apply the same order to forwarding failures, terminal stream errors (STRM-4), scheduled probes (AHS-8), and dashboard Channel tests (PHS-8).
+RTA-5b. Classify using the first matching step below. Built-in steps 1 through 6 use the normalized `code` and `type` from RTA-5a. Apply the same order to forwarding failures, terminal stream errors (STRM-4), scheduled probes (AHS-8), and dashboard Channel tests (PHS-8).
 
+0. For an upstream-reported failure, evaluate the CFG-4b rules in list order. The first matching rule determines the final class. If no rule matches, continue with the built-in steps below without changing their order. Upstream-reported failures include HTTP error responses, structured error bodies on HTTP `2xx`, and upstream error or failed terminal events in a stream. Do not evaluate rules for transport failures, local decoder or validation errors, or other Monoize-side errors. Use the rules in the routing configuration snapshot for the attempt or test.
 1. A billing-exhaustion signal (RTA-5a item 1) is Persistent.
 2. Every other HTTP `429` is RateLimited.
 3. An RTA-5a item 2 status is Persistent.
 4. Either field equal to `rate_limit_error`, `rate_limit_exceeded`, or `too_many_requests` is RateLimited.
 5. An RTA-5a item 3 signal is Persistent.
 6. HTTP `408`, HTTP `5xx`, or either field equal to `overloaded_error`, `server_error`, `service_unavailable`, or `temporarily_unavailable` is Transient. Other forwarding failures follow RTA-6 and STRM-4.
+
+RTA-5f. A step 0 rule matches if and only if both tests below pass:
+
+1. `status_codes` is empty, or it contains the actual HTTP status of the upstream response carrying the error. A failed stream carried by HTTP `200` has status `200` for this test, even when its event declares an error status or the decoder synthesizes one. An upstream-reported failure without an HTTP response can match only an empty status list. The actual HTTP status used here does not replace the explicit or synthesized status used by the built-in classifier, retry gates, error rendering, or logs.
+2. The trimmed `keyword` is a substring of at least one of the upstream-reported `message`, `code`, or `type` strings, compared separately before sanitization. An absent or non-string field cannot match. Map each Unicode scalar on both sides to its Unicode simple lowercase mapping (one scalar, no locale, no normalization, no multi-scalar expansion; unchanged when there is no mapping). Then perform literal substring matching. Do not match a Monoize-generated error summary or concatenate fields.
 
 RTA-5c. If the effective Channel proxy cannot construct an HTTP client, Monoize MUST fail that attempt with `upstream_proxy_config_invalid`, record it in `tried_providers`, and advance to the next eligible Channel or Provider. It MUST NOT fall back to a direct connection, retry the same Channel, or record a passive-health failure sample.
 
@@ -258,13 +277,13 @@ Forwarding attempts MUST use the headers of non-stream HTTP error responses and 
 
 RTA-5e. A target-capability failure is a rejection in `media-transport.spec.md` MT20a while preparing a selected forwarding attempt. It MUST occur before any upstream bytes are sent for that attempt. Count the failed attempt against the existing RTA-4 Provider attempt budget and record exactly one `tried_providers` entry with its existing error code and message (RL17, SAN-5). Do not retry the same Channel, including with a bound-target extra retry under RTA-4a. Do not record a passive health sample, trigger a shared-origin blast, or clear affinity. Advance to the next eligible Channel or Provider under the existing attempt limits and order. A pre-dispatch error outside MT20a MUST NOT take this path merely because it has the same status or code.
 
-RTA-6. On an HTTP `408`, HTTP `429`, HTTP `5xx`, timeout, connection failure, RTA-5a persistent failure, or RTA-5b structured failure, Channel passive health state MUST be updated. A persistent failure MUST mark the relevant health entry unhealthy after its first occurrence. A Transient or RateLimited failure MUST use the threshold in PHS-3.
+RTA-6. For a forwarding failure with a class from RTA-5b, update passive health under PHS-1 through PHS-5, subject to RTA-6a and HSK-5. A matching step 0 rule makes the failure breaker-relevant even if it would otherwise be ignored. A Persistent failure trips the relevant healthy key immediately without a rate-limit wait. Transient and RateLimited failures use the PHS-3 threshold; only a RateLimited trip can use the honor-rate-limit wait under PHS-5. Forwarding timeouts and connection failures retain their built-in Transient handling.
 
 RTA-6b. Other upstream failures MUST NOT update Channel passive health state.
 
 RTA-6a. If `provider.circuit_breaker_enabled == false`, no forwarding failure, including a Persistent failure, may trip or otherwise change passive health state (PHS-2). The failure's retry classification is unchanged.
 
-RTA-6c. Shared-origin blast. When a retryable failure's upstream HTTP status is `502`, `503`, or `524`, Monoize MUST treat the failure as a shared-origin blast for that attempt's Provider:
+RTA-6c. Shared-origin blast. Apply this rule when a same-Channel-retryable failure has final class Transient and the actual upstream HTTP error response has status `502`, `503`, or `524`. A rule that changes such an error to Persistent or RateLimited MUST NOT produce a shared-origin blast:
 
 1. The origin key is `lowercase(scheme) + "://" + lowercase(host) + ":" + port`, where `scheme`, `host`, and `port` come from parsing the Channel `base_url`. `port` is the URL's explicit port when present, otherwise the default port for that scheme (`80` for `http`, `443` for `https`). Only `http` and `https` origins are valid. If `base_url` cannot be parsed into such an origin, that Channel has no origin key and MUST NOT share health with any other Channel.
 2. Every other Channel of the same Provider that is enabled, has `weight > 0`, and has an equal origin key MUST receive the same Transient passive-failure sample as the failed Channel, using the failed attempt's resolved passive parameters and the same timestamp. Peer updates MUST use the same health keying as the failed attempt (HSK-1 / HSK-2). A peer insert that would exceed HSK-6 MUST be skipped.
@@ -305,7 +324,7 @@ STRM-2c. A `ResponseDone` event that arrives as the first output event closes th
 
 STRM-3. A streaming request MUST write or refresh affinity only after the upstream stream completes without terminal error.
 
-STRM-4. If a partial stream later fails with a breaker-relevant terminal failure — an in-stream terminal error event classified by RTA-5a, RTA-5b, or RTA-6, or a stream adapter failure whose error code starts with `upstream_` (idle timeout, stream decode failure, protocol error, missing stream terminal) — Monoize MUST record exactly one passive health failure for the serving Channel using the attempt's health key, subject to PHS-2 and HSK-5. Apply RTA-5a and RTA-5b to the terminal error's structured `code`, `type`, and explicit or synthesized status (STRM-2b). Billing-exhaustion signals MUST be Persistent even if the transport returned HTTP `200` or the terminal error status is `429`. Persistent failures MUST trip immediately per PHS-3. Other qualifying events and adapter failures have the Transient class. A mid-stream failure MUST NOT trigger a shared-origin blast and MUST NOT mark peer Channels. An event outside these classifications MUST NOT update health. An adapter failure whose error code does not start with `upstream_` (internal transform or encode failure) MUST NOT update health and MUST NOT clear the affinity binding.
+STRM-4. For an upstream-reported in-stream error or failed terminal event, apply RTA-5b step 0 to the actual upstream HTTP status and upstream error fields specified by RTA-5f. If no rule matches, classify the event's structured `code`, `type`, and explicit or synthesized status (STRM-2b) with the built-in rules. For a breaker-relevant terminal error after partial output, record exactly one passive health failure for the serving key, subject to PHS-2 and HSK-5. Apply the final class per RTA-6 and PHS-3 through PHS-5. Stream adapter failures whose code starts with `upstream_` retain their built-in Transient handling and MUST NOT match rules. An unclassified failure MUST NOT update health. A mid-stream failure MUST NOT trigger a shared-origin blast or mark peer Channels. Other adapter failures, including internal transform or encode failures, MUST NOT update health or clear affinity.
 
 STRM-4a. After recording the STRM-4 sample, Monoize MUST clear the request's affinity binding if and only if the serving attempt is the request's affinity-hit target (`affinity_hit == true`) and the Channel health state for the attempt's health key is unhealthy after the sample (AFF-9 conditions 1 and 3). In every other case the binding MUST remain stored.
 
@@ -440,7 +459,7 @@ PHS-2. A successful attempt MUST NOT append a passive sample. If `provider.circu
 
 PHS-3. Only a forwarding failure under this rule or a dashboard test failure under PHS-8 may transition a key from healthy to unhealthy. On a Persistent forwarding failure, a currently healthy key MUST become unhealthy immediately. On a Transient or RateLimited forwarding failure, a currently healthy key MUST become unhealthy when its failure-timestamp queue length reaches the effective threshold. Evaluate current health per HSK-10. Failure-count evaluation MUST read the queue length in constant time and MUST NOT scan the queue. The queue length MUST NOT exceed the effective threshold.
 
-PHS-4. At a PHS-3 or PHS-8 transition the runtime MUST write `healthy = false`, allocate a new `trip_id` (HSK-9), record `t`, `rl`, and `ra`, reset `probe_success_count` to `0` and `last_probe_at` to null, and set the mode and `next_recovery_at`. The mode MUST be `probe` only on the primary and only for a Channel whose `provider_type != replicate`. The mode MUST be `timed` on replicas and for `replicate` Channels on either node. Use Channel `provider_type`, not a model API type override. Set `rl = true` exactly when RTA-5a and RTA-5b classify the triggering failure as RateLimited; a Persistent failure always sets `rl = false`. Set `ra` to the RTA-5d result. A failure while the key is effectively unhealthy MUST NOT replace the recorded trip or its recovery time.
+PHS-4. At a PHS-3 or PHS-8 transition the runtime MUST write `healthy = false`, allocate a new `trip_id` (HSK-9), record `t`, `rl`, and `ra`, reset `probe_success_count` to `0` and `last_probe_at` to null, and set the mode and `next_recovery_at`. The mode MUST be `probe` only on the primary and only for a Channel whose `provider_type != replicate`. The mode MUST be `timed` on replicas and for `replicate` Channels on either node. Use Channel `provider_type`, not a model API type override. Set `rl = true` exactly when the final class under RTA-5b is RateLimited; a Persistent failure always sets `rl = false`. Set `ra` to the RTA-5d result. A failure while the key is effectively unhealthy MUST NOT replace the recorded trip or its recovery time.
 
 PHS-5. Let `honor` be the Channel's effective value from CFG-4a, and `interval` its effective interval from CFG-3a in seconds. If `honor && rl`, the initial wait in either mode MUST be `max(passive_rate_limit_cooldown_seconds, ra)` with absent `ra` treated as `0`. Otherwise the initial wait MUST be `interval` in `probe` mode or `passive_cooldown_seconds` in `timed` mode. Resolve the two passive waits per CFG-5 (RTA-6c for shared-origin samples). The runtime MUST NOT consult `passive_rate_limit_cooldown_seconds` for recovery when `honor = false`. Set `next_recovery_at = t + initial_wait`, adding the wait in seconds. For `timed` mode, routing and every status read MUST treat the key as healthy at and after that time without waiting for a background task. For `probe` mode, reaching that time only makes the key due for a probe (AHS-1).
 
@@ -448,7 +467,7 @@ PHS-6. A successful forwarding attempt subject to PHS-2 and HSK-5 MUST immediate
 
 PHS-7. For each health write from a forwarding attempt, active probe, or dashboard test, `now` MUST be the wall-clock time when applying that update. It MUST NOT be a timestamp captured at dispatch or at the beginning of a scheduler tick. Use one write-time value per failed forwarding attempt, including its shared-origin samples under RTA-6c.
 
-PHS-8. For a failed dashboard Channel test (CM-CH-TEST-1), classify the upstream outcome under RTA-5a and RTA-5b, including structured error fields reported by a stream decoder. Trip the tested key only when all of these conditions hold:
+PHS-8. For a failed dashboard Channel test (CM-CH-TEST-1), classify the upstream outcome under RTA-5b, including step 0 with the actual HTTP status and upstream `message`, `code`, and `type`, when present. Trip the tested key only when all of these conditions hold:
 
 1. The outcome is a Persistent upstream failure.
 2. The Provider circuit breaker is enabled.
@@ -497,7 +516,7 @@ AHS-6. *(Removed — `next_recovery_at` is the only probe due-time gate. See AHS
 
 AHS-7. Each due health key for a Channel with `per_model_circuit_break = true` MUST be evaluated separately. Each result MUST affect only the health key that the probe targeted. It MUST NOT modify the base Channel key or any sibling model key.
 
-AHS-8. On an accepted failed probe (AHS-10), the key MUST remain unhealthy. Set `probe_success_count = 0` and `last_probe_at = now`. Classify the probe's own HTTP status and structured error fields, including those in a decoded upstream terminal error event, under RTA-5a and RTA-5b. If `honor` is true (CFG-4a) and the failure is RateLimited, set `next_recovery_at = now + max(passive_rate_limit_cooldown_seconds, ra')`, where `ra'` is the RTA-5d result of that probe, or `0` when absent. In every other case, including Persistent HTTP `429` with a billing-exhaustion signal, set `next_recovery_at = now + interval` (PHS-5). Use neither the original trip's Retry-After nor the timed recovery wait for a probe failure. The recorded trip MUST NOT change.
+AHS-8. On an accepted failed probe (AHS-10), the key MUST remain unhealthy. Set `probe_success_count = 0` and `last_probe_at = now`. Classify the probe's failure under RTA-5b, including step 0 with the probe's actual HTTP status and upstream `message`, `code`, and `type`, when present. If `honor` is true (CFG-4a) and the final class is RateLimited, set `next_recovery_at = now + max(passive_rate_limit_cooldown_seconds, ra')`, where `ra'` is the RTA-5d result of that probe, or `0` when absent. Otherwise, including for a final Persistent classification, set `next_recovery_at = now + interval` (PHS-5). Use neither the original trip's Retry-After nor the timed recovery wait for a probe failure. The recorded trip MUST NOT change.
 
 AHS-9. The scheduler MUST run only on a primary (PRP11). It MUST skip every Channel whose `provider_type = replicate` (PHS-4).
 

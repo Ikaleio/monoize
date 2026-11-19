@@ -3,7 +3,10 @@
 use super::errors::native_error;
 use super::gate::OutputOrderGate;
 use super::item::OutputItem;
-use crate::handlers::usage::{record_stream_terminal_error, record_visible_stream_event_delta};
+use crate::handlers::usage::{
+    record_stream_terminal_error, record_stream_upstream_terminal_error,
+    record_visible_stream_event_delta,
+};
 use crate::handlers::{StreamRuntimeMetrics, StreamTerminalError, UrpRequest as HandlerUrpRequest};
 use crate::urp::{Node, NodeHeader, UrpStreamEvent};
 use axum::http::StatusCode;
@@ -256,16 +259,25 @@ impl ResponsesStreamDecoder {
         label: &str,
         event_name: &str,
         data: &Value,
+        reported: bool,
     ) -> Flow {
         self.release_held(None, None).await;
-        let error = native_error(event_name, data);
+        let error = native_error(event_name, data, reported);
         self.send(UrpStreamEvent::Error {
             code: error.code,
             message: error.message,
             extra_body: error.extra_body,
         })
         .await;
-        record_stream_terminal_error(&self.metrics, label, error.terminal).await;
+        record_stream_upstream_terminal_error(
+            &self.metrics,
+            label,
+            error.terminal,
+            None,
+            None,
+            error.reported_error,
+        )
+        .await;
         Flow::Stop
     }
 }

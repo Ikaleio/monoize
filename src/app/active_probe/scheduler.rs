@@ -2,11 +2,11 @@ use super::*;
 use crate::handlers::channel_probe::{
     ChannelProbeOutcome, ProbeRequestSettings, prepare_channel_probe,
 };
-use crate::handlers::routing::RetryableFailureClass;
 use crate::monoize_routing::{
     ChannelProbe, MonoizeChannel, MonoizeProvider, MonoizeProviderType, RecoveryMode,
     recovery_deadline, recovery_wait, select_channel_probe_model,
 };
+use crate::settings::RetryableFailureClass;
 use futures_util::StreamExt;
 
 /// Primary-only background loop that probes unhealthy channels and records each

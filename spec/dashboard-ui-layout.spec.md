@@ -517,6 +517,7 @@ ST2. Those categories MUST expose at least these editable fields bound to `GET/P
 - `monoize_passive_window_seconds` (integer >= 1)
 - `monoize_honor_rate_limit` (boolean switch, default `false`; placement and description in SSU-3c)
 - `monoize_passive_rate_limit_cooldown_seconds` (integer >= 1)
+- `monoize_failure_classification_rules` (ordered rule array; Passive Breaker editor per SSU-3d)
 - `monoize_request_timeout_ms` (integer >= 1)
 - `monoize_stream_idle_timeout_ms` (integer >= 1)
 - `monoize_enable_estimated_billing` (boolean)

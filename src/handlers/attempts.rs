@@ -122,9 +122,11 @@ impl AttemptDriver {
         error: &AppError,
         failure_class: Option<RetryableFailureClass>,
     ) {
-        self.record_terminal_failure(state, &slot, error, failure_class)
+        let final_class = self
+            .record_terminal_failure(state, &slot, error, failure_class)
             .await;
         if !error.target_capability
+            && final_class != Some(RetryableFailureClass::Persistent)
             && self
                 .allows_same_channel_retry(state, &slot, failure_class)
                 .await
@@ -145,7 +147,7 @@ impl AttemptDriver {
         slot: &AttemptSlot,
         error: &AppError,
         failure_class: Option<RetryableFailureClass>,
-    ) {
+    ) -> Option<RetryableFailureClass> {
         let mask_sensitive_info = state.monoize_runtime.read().await.mask_sensitive_info;
         self.tried_providers.push(TriedProvider::from_app_error(
             slot.position.attempt_number,
@@ -154,13 +156,43 @@ impl AttemptDriver {
             self.dispatch_duration_ms(),
             mask_sensitive_info,
         ));
-        if !error.target_capability
-            && record_channel_failure(state, &slot.attempt, error, failure_class).await
-            && let Some(token) = shared_origin_skip_token(&slot.attempt)
-        {
-            self.shared_origin_skips.insert(token);
+        let mut final_class = None;
+        if !error.target_capability {
+            let custom_class = error.reported_error.classify(
+                &slot.attempt.failure_classification_rules,
+                error.actual_upstream_status,
+            );
+            final_class = custom_class.or(failure_class).or_else(|| {
+                classify_channel_health_failure(
+                    error.upstream_status,
+                    error.upstream_code.as_deref(),
+                    error.upstream_type.as_deref(),
+                )
+            });
+            let blast_status = match custom_class {
+                Some(_) if failure_class == Some(RetryableFailureClass::Transient) => {
+                    error.actual_upstream_status
+                }
+                Some(_) => None,
+                None => error.upstream_status,
+            };
+            let retry_after = if custom_class == Some(RetryableFailureClass::RateLimited) {
+                error
+                    .reported_error
+                    .retry_after_seconds()
+                    .or(error.retry_after_seconds)
+            } else {
+                error.retry_after_seconds
+            };
+            if record_channel_failure(state, &slot.attempt, final_class, blast_status, retry_after)
+                .await
+                && let Some(token) = shared_origin_skip_token(&slot.attempt)
+            {
+                self.shared_origin_skips.insert(token);
+            }
         }
         self.last_failed_attempt = Some(slot.attempt.clone());
+        final_class
     }
 
     /// RTA-4a: the affinity-hit target earns one dispatch beyond

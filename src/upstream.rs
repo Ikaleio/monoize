@@ -36,8 +36,7 @@ pub struct UpstreamCallError {
     pub param: Option<String>,
     pub message: String,
     pub source: UpstreamErrorSource,
-    pub forwarded_headers: Box<[(axum::http::HeaderName, axum::http::HeaderValue)]>,
-    pub retry_after_seconds: Option<u16>,
+    pub(crate) reported_error: UpstreamErrorFields,
 }
 
 impl UpstreamCallError {
@@ -58,8 +57,7 @@ impl UpstreamCallError {
             param: None,
             message,
             source,
-            forwarded_headers: Box::default(),
-            retry_after_seconds: None,
+            reported_error: UpstreamErrorFields::default(),
         }
     }
 
@@ -74,6 +72,39 @@ impl UpstreamCallError {
         self.source = source;
         self
     }
+
+    pub(crate) fn failure_response(&self) -> FailureResponse {
+        self.reported_error
+            .0
+            .as_ref()
+            .and_then(|reported| reported.response)
+            .unwrap_or_else(|| match self.source {
+                UpstreamErrorSource::EmptyBody
+                | UpstreamErrorSource::UnparsedBody
+                | UpstreamErrorSource::StructuredBody => self
+                    .status
+                    .map(|status| FailureResponse::new(status, None))
+                    .unwrap_or_default(),
+                _ => FailureResponse::default(),
+            })
+    }
+
+    pub(crate) fn take_forwarded_headers(&mut self) -> ForwardedHeaders {
+        self.reported_error
+            .0
+            .as_mut()
+            .map(|metadata| std::mem::take(&mut metadata.forwarded_headers))
+            .unwrap_or_default()
+    }
+
+    fn set_forwarded_headers(&mut self, forwarded_headers: ForwardedHeaders) {
+        if !forwarded_headers.is_empty() {
+            self.reported_error
+                .0
+                .get_or_insert_with(Box::default)
+                .forwarded_headers = forwarded_headers;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,6 +113,91 @@ pub struct UpstreamErrorInfo {
     pub error_type: Option<String>,
     pub param: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UpstreamErrorFields(Option<Box<ReportedFailure>>);
+
+#[derive(Debug, Clone, Default)]
+// Keep infrequent response detail together so other errors fit inline without allocations.
+struct ReportedFailure {
+    fields: [Option<String>; 3],
+    reported: bool,
+    response: Option<FailureResponse>,
+    forwarded_headers: ForwardedHeaders,
+}
+
+impl UpstreamErrorFields {
+    pub(crate) fn from_json(error: &Value) -> Self {
+        Self::from_members(|key| error.get(key).and_then(Value::as_str))
+    }
+
+    pub(crate) fn from_members<'a>(member: impl Fn(&str) -> Option<&'a str>) -> Self {
+        Self(Some(Box::new(ReportedFailure {
+            fields: ["message", "code", "type"].map(|key| member(key).map(str::to_owned)),
+            reported: true,
+            ..Default::default()
+        })))
+    }
+
+    pub(crate) fn attach_failure_response(&mut self, response: FailureResponse) {
+        self.0.get_or_insert_with(Box::default).response = Some(response);
+    }
+
+    pub(crate) fn retry_after_seconds(&self) -> Option<u16> {
+        self.0.as_ref()?.response?.retry_after_seconds()
+    }
+
+    pub(crate) fn is_reported(&self) -> bool {
+        self.0.as_ref().is_some_and(|metadata| metadata.reported)
+    }
+
+    pub(crate) fn classify(
+        &self,
+        rules: &crate::settings::CompiledFailureRules,
+        http_status: Option<u16>,
+    ) -> Option<crate::settings::RetryableFailureClass> {
+        let [message, code, kind] = &self.0.as_ref().filter(|metadata| metadata.reported)?.fields;
+        rules.classify(
+            http_status,
+            [message.as_deref(), code.as_deref(), kind.as_deref()],
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FailureResponse {
+    status: Option<StatusCode>,
+    retry_after_seconds: Option<u16>,
+}
+
+impl FailureResponse {
+    pub(crate) fn from_http(response: &reqwest::Response) -> Self {
+        Self::new(
+            response.status(),
+            parse_retry_after(response.headers(), chrono::Utc::now().timestamp()),
+        )
+    }
+
+    fn new(status: StatusCode, retry_after_seconds: Option<u16>) -> Self {
+        Self {
+            status: Some(status),
+            retry_after_seconds,
+        }
+    }
+
+    pub(crate) fn status(self) -> Option<u16> {
+        self.status.map(|status| status.as_u16())
+    }
+
+    pub(crate) fn retry_after_seconds(self) -> Option<u16> {
+        self.retry_after_seconds
+    }
+
+    pub(crate) fn apply(self, error: &mut AppError) {
+        error.actual_upstream_status = self.status();
+        error.retry_after_seconds = self.retry_after_seconds();
+    }
 }
 
 /// Byte length of `value` serialized as compact JSON, computed without
@@ -166,11 +282,11 @@ pub async fn call_upstream_with_timeout_and_headers(
         extra_headers,
     )
     .await
-    .map(|(value, _)| value)
+    .map(|(value, _, _)| value)
 }
 
 /// `call_upstream_with_timeout_and_headers` that also returns SE1d `FWD`.
-pub async fn call_upstream_json_with_response_headers(
+pub(crate) async fn call_upstream_json_with_response_headers(
     client: &reqwest::Client,
     provider: &ProviderConfig,
     auth_value: &str,
@@ -178,15 +294,16 @@ pub async fn call_upstream_json_with_response_headers(
     body: JsonBody,
     timeout_ms: u64,
     extra_headers: &[(String, String)],
-) -> Result<(Value, ForwardedHeaders), UpstreamCallError> {
+) -> Result<(Value, ForwardedHeaders, FailureResponse), UpstreamCallError> {
     let req = json_request(client, provider, auth_value, path, body, extra_headers)?;
     with_deadline(timeout_ms, "upstream response not completed", async {
         let resp = exchange(req).await?;
         let forwarded = forwarded_response_headers(resp.headers());
+        let failure_response = FailureResponse::from_http(&resp);
         match read_json_body(resp).await {
-            Ok(value) => Ok((value, forwarded)),
+            Ok(value) => Ok((value, forwarded, failure_response)),
             Err(mut err) => {
-                err.forwarded_headers = forwarded.into_boxed_slice();
+                err.set_forwarded_headers(forwarded);
                 Err(err)
             }
         }
@@ -387,8 +504,17 @@ async fn non_success_upstream_error(
     let forwarded_headers = forwarded_response_headers(resp.headers());
     let retry_after_seconds = parse_retry_after(resp.headers(), chrono::Utc::now().timestamp());
     let (text, _) = read_http_error_body(resp).await;
-    let info = extract_error_info(&text);
-    let (message, source) = match info.message.clone() {
+    let parsed = serde_json::from_str::<Value>(&text).ok();
+    let mut info = parsed
+        .as_ref()
+        .map_or_else(UpstreamErrorInfo::default, |value| {
+            let mut info = extract_error_members(reported_error_object(value));
+            if !value.get("error").is_some_and(Value::is_object) {
+                info.message = None;
+            }
+            info
+        });
+    let (message, source) = match info.message.take() {
         Some(message) => (message, UpstreamErrorSource::StructuredBody),
         None if text.is_empty() => (
             "upstream returned an empty error body".to_string(),
@@ -399,8 +525,14 @@ async fn non_success_upstream_error(
     let mut err = UpstreamCallError::new(UpstreamErrorKind::Http, Some(status), message)
         .with_error_info(info)
         .with_source(source);
-    err.forwarded_headers = forwarded_headers.into_boxed_slice();
-    err.retry_after_seconds = retry_after_seconds;
+    if let Some(value) = parsed.as_ref() {
+        err.reported_error = UpstreamErrorFields::from_json(reported_error_object(value));
+    }
+    if err.reported_error.is_reported() || retry_after_seconds.is_some() {
+        err.reported_error
+            .attach_failure_response(FailureResponse::new(status, retry_after_seconds));
+    }
+    err.set_forwarded_headers(forwarded_headers);
     err
 }
 
@@ -538,17 +670,11 @@ pub(crate) fn join_url(base: &str, path: &str) -> String {
     }
 }
 
-fn extract_error_info(text: &str) -> UpstreamErrorInfo {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return UpstreamErrorInfo::default();
-    };
-    if let Some(error) = value.get("error").filter(|error| error.is_object()) {
-        extract_error_members(error)
-    } else {
-        let mut info = extract_error_members(&value);
-        info.message = None;
-        info
-    }
+pub(crate) fn reported_error_object(value: &Value) -> &Value {
+    value
+        .get("error")
+        .filter(|error| error.is_object())
+        .unwrap_or(value)
 }
 
 pub(crate) fn extract_error_members(error: &Value) -> UpstreamErrorInfo {

@@ -264,6 +264,7 @@ mod media_resource_routing_tests {
             recovery_mode: crate::monoize_routing::RecoveryMode::Probe,
             channel_max_retries: 1,
             channel_retry_interval_ms: 0,
+            failure_classification_rules: crate::settings::CompiledFailureRules::default(),
             circuit_breaker_enabled: false,
             per_model_circuit_break: false,
             provider_attempt_limit: None,

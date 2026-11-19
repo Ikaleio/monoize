@@ -359,7 +359,7 @@ impl StreamForward {
         let downstream = self.request.downstream;
         // FP4h: an HTTP attempt is accepted by its 2xx headers; a WebSocket
         // attempt only by its first non-control frame.
-        let retry_after_seconds = if let StreamUpstreamSource::Http(upstream_resp) = &source {
+        let upstream_response = if let StreamUpstreamSource::Http(upstream_resp) = &source {
             self.request
                 .commit
                 .accept(if downstream.is_same_family(attempt.provider_type) {
@@ -367,9 +367,9 @@ impl StreamForward {
                 } else {
                     Vec::new()
                 });
-            upstream::parse_retry_after(upstream_resp.headers(), now_ts())
+            upstream::FailureResponse::from_http(upstream_resp)
         } else {
-            None
+            upstream::FailureResponse::default()
         };
         // XTRA-5b: request-envelope members never cross families.
         let pending_request_envelope_extra = self
@@ -378,7 +378,13 @@ impl StreamForward {
             .as_ref()
             .filter(|_| downstream.is_same_family(attempt.provider_type))
             .cloned();
-        let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
+        let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
+            terminal: StreamTerminalDiagnostics {
+                upstream_response,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         let (stream_idle_timeout_ms, mask_sensitive_info) = {
             let runtime = self.request.state.monoize_runtime.read().await;
             (
@@ -400,7 +406,7 @@ impl StreamForward {
             decode_handle,
             &runtime_metrics,
             &self.request.commit,
-            retry_after_seconds,
+            upstream_response.retry_after_seconds(),
         )
         .await
         {

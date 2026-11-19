@@ -214,6 +214,7 @@ impl<'a> AnthropicMessagesStreamState<'a> {
             terminal_error,
             raw.get("code").and_then(Value::as_str),
             raw.get("type").and_then(Value::as_str),
+            crate::upstream::UpstreamErrorFields::from_json(raw),
         )
         .await;
         Flow::Stop

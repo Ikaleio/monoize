@@ -157,26 +157,38 @@ export function SettingRow({ id, switchControl = false, children }: SettingRowPr
 
 interface SettingBlockProps {
   id: SettingEntryId;
+  inRowGroup?: boolean;
   children: ReactNode;
 }
 
-/** The single entry of an editor group. */
-export function SettingBlock({ id, children }: SettingBlockProps) {
+export function SettingBlock({ id, inRowGroup = false, children }: SettingBlockProps) {
+  const { t } = useTranslation();
   const visible = useEntryVisible(id);
   const { highlightId, fieldError } = useSettingsRowState();
   if (!visible) return null;
 
-  // Redirect errors render on their own row inside the editor.
+  // List editors render indexed errors on the offending row.
   const error =
-    fieldError?.entryId === id && fieldError.redirectIndex === undefined ? fieldError.message : null;
+    fieldError?.entryId === id && fieldError.redirectIndex === undefined && !fieldError.classificationRule
+      ? fieldError.message : null;
+  const entry = inRowGroup ? getSettingEntry(id) : null;
   return (
     <div
       id={`setting-${id}`}
       className={cn(
-        "min-w-0 scroll-mt-4 rounded-md transition-shadow",
-        highlightId === id && "ring-2 ring-ring ring-offset-2 ring-offset-background"
+        "min-w-0 scroll-mt-4 transition-shadow",
+        inRowGroup ? "flex flex-col gap-3 px-4 py-4 sm:px-6" : "rounded-md",
+        highlightId === id && (inRowGroup ? "ring-2 ring-inset ring-ring" : "ring-2 ring-ring ring-offset-2 ring-offset-background")
       )}
     >
+      {entry && (
+        <div className="flex flex-col gap-1.5">
+          {entry.labelKey && <h4 className="text-sm font-medium leading-5">{t(entry.labelKey)}</h4>}
+          {entry.descriptionKey && (
+            <p className="text-pretty text-sm text-muted-foreground">{t(entry.descriptionKey)}</p>
+          )}
+        </div>
+      )}
       {children}
       {error ? <FieldError className="mt-2">{error}</FieldError> : null}
     </div>

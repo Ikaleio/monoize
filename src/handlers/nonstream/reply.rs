@@ -52,7 +52,7 @@ impl NonstreamRun<'_> {
                 response,
                 observed_model,
             } => Ok((response, observed_model.unwrap_or_default())),
-            Reply::Body(body) => {
+            Reply::Body(body, failure_response) => {
                 let mask_sensitive_info = self
                     .inputs
                     .state
@@ -66,7 +66,11 @@ impl NonstreamRun<'_> {
                     &call.req.model,
                     mask_sensitive_info,
                     &call.req,
-                )?;
+                )
+                .map_err(|mut error| {
+                    error.actual_upstream_status = failure_response.status();
+                    error
+                })?;
                 let observed_response_model = body
                     .get("model")
                     .and_then(Value::as_str)
@@ -142,7 +146,7 @@ impl NonstreamRun<'_> {
             return;
         };
         let (upstream_response, reconstructed_urp_response) = match reply {
-            Reply::Body(body) => (Some(body.clone()), None),
+            Reply::Body(body, _) => (Some(body.clone()), None),
             // RCD-D10c: a stream-collected attempt has no provider JSON body,
             // so the pre-response-transform collected terminal event
             // substitutes for it.

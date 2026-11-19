@@ -408,6 +408,14 @@ impl SettingsStore {
                 "monoize_honor_rate_limit" => {
                     settings.monoize_honor_rate_limit = row.value.parse().unwrap_or(false);
                 }
+                FAILURE_CLASSIFICATION_RULES_KEY => {
+                    let value = serde_json::from_str(&row.value).map_err(|error| {
+                        format!("invalid {FAILURE_CLASSIFICATION_RULES_KEY}: {error}")
+                    })?;
+                    settings.monoize_failure_classification_rules =
+                        parse_failure_classification_rules(&value)
+                            .map_err(|(path, error)| format!("invalid {path}: {error}"))?;
+                }
                 "monoize_active_probe_interval_seconds" => {
                     settings.monoize_active_probe_interval_seconds =
                         row.value.parse().unwrap_or(30);
@@ -520,7 +528,11 @@ impl SettingsStore {
         Ok(settings)
     }
 
-    pub async fn update_all(&self, settings: &SystemSettings) -> Result<SystemSettings, String> {
+    pub async fn update_all(
+        &self,
+        settings: &SystemSettings,
+        save_classification_rules: bool,
+    ) -> Result<SystemSettings, String> {
         let mut settings = settings.clone();
         canonicalize_transform_rules(&mut settings.global_transforms);
         canonicalize_codex_model_ids(&mut settings.codex_model_ids);
@@ -530,7 +542,7 @@ impl SettingsStore {
             clamp_request_capture_max_total_bytes(settings.monoize_request_capture_max_total_bytes);
         settings.monoize_affinity_idle_ttl_seconds =
             settings.monoize_affinity_idle_ttl_seconds.max(1);
-        let values = vec![
+        let mut values = vec![
             (
                 "registration_enabled",
                 settings.registration_enabled.to_string(),
@@ -695,6 +707,14 @@ impl SettingsStore {
                 settings.recharge_public_origin.clone(),
             ),
         ];
+
+        if save_classification_rules {
+            values.push((
+                FAILURE_CLASSIFICATION_RULES_KEY,
+                serde_json::to_string(&settings.monoize_failure_classification_rules)
+                    .map_err(|error| error.to_string())?,
+            ));
+        }
 
         let committed_at = Utc::now();
         let updated_at = committed_at.to_rfc3339();

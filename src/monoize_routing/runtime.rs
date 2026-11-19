@@ -19,6 +19,8 @@ pub struct MonoizeRuntimeConfig {
     pub passive_window_seconds: u64,
     pub passive_rate_limit_cooldown_seconds: u64,
     pub honor_rate_limit: bool,
+    #[serde(skip)]
+    pub(crate) failure_classification_rules: crate::settings::CompiledFailureRules,
     pub active_interval_seconds: u64,
     pub active_success_threshold: u32,
     pub active_probe_model: Option<String>,
@@ -57,6 +59,7 @@ impl Default for MonoizeRuntimeConfig {
             passive_window_seconds: 30,
             passive_rate_limit_cooldown_seconds: 15,
             honor_rate_limit: false,
+            failure_classification_rules: crate::settings::CompiledFailureRules::default(),
             active_interval_seconds: 30,
             active_success_threshold: 1,
             active_probe_model: None,

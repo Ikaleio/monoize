@@ -156,10 +156,9 @@ pub(in crate::handlers) fn decode_response_from_provider(
     if provider_type == ProviderType::ChatCompletion
         && let Some(error) = embedded_chat_completion_error(value)
     {
-        return Err(embedded_chat_completion_error_to_app(
-            error,
-            mask_sensitive_info,
-        ));
+        let mut app_error = embedded_chat_completion_error_to_app(error, mask_sensitive_info);
+        app_error.reported_error = upstream::UpstreamErrorFields::from_json(error);
+        return Err(app_error);
     }
     if provider_type == ProviderType::ChatCompletion
         && chat_completion_finish_reason_is_error(value)

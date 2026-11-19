@@ -71,7 +71,7 @@ pub(super) async fn probe_stream_first_output(
                     .filter(|status| (400..=599).contains(status))
                     .and_then(|status| StatusCode::from_u16(status as u16).ok());
                 let _ = decode_handle.await;
-                let guard = runtime_metrics.lock().await;
+                let mut guard = runtime_metrics.lock().await;
                 let terminal = guard.terminal.terminal_error.as_ref();
                 let http_status = terminal
                     .map(|terminal| terminal.http_status)
@@ -86,7 +86,6 @@ pub(super) async fn probe_stream_first_output(
                 let error_type = error_type.map(str::to_owned);
                 let reported_code = reported_code.map(str::to_owned);
                 let param = terminal.and_then(|terminal| terminal.param.clone());
-                drop(guard);
                 let code = code.unwrap_or_else(|| "upstream_stream_error".to_string());
                 // `upstream_status` stays unset: the status is synthesized by the
                 // decoder and must not trigger an RTA-6c shared-origin blast.
@@ -96,12 +95,18 @@ pub(super) async fn probe_stream_first_output(
                     &code,
                     error_type.as_deref(),
                 );
-                let error = AppError::new(status, code, message).with_upstream_error(
+                let mut error = AppError::new(status, code, message).with_upstream_error(
                     None,
                     reported_code,
                     error_type,
                     param,
                 );
+                guard.terminal.apply_failure_evidence(&mut error);
+                if error.reported_error.is_reported() {
+                    error
+                        .reported_error
+                        .attach_failure_response(guard.terminal.upstream_response);
+                }
                 return Err(PreOutputStreamFailure {
                     error,
                     failure_class,

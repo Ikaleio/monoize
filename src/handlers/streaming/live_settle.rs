@@ -20,7 +20,7 @@ impl SettledStreamMetrics {
         estimated_input_tokens: u64,
         terminal_visible_output_bytes: u64,
     ) -> Self {
-        let guard = runtime_metrics.lock().await;
+        let mut guard = runtime_metrics.lock().await;
         // MP-F3: a pass-through stream without upstream usage settles free
         // under the effective `allow_free_when_missing_usage` flag (or the
         // MP-F5 unpriced rule); otherwise it settles from the byte estimate
@@ -60,7 +60,7 @@ impl SettledStreamMetrics {
             upstream_usage: guard.usage.clone(),
             usage,
             is_estimated,
-            terminal: guard.terminal.clone(),
+            terminal: std::mem::take(&mut guard.terminal),
             response_service_tier: guard.response_service_tier.clone(),
             response_model: guard.response_model.clone(),
         }
@@ -108,7 +108,10 @@ impl LiveFinish {
             reconstructed,
             metrics,
         } = self;
-        if let Some(failure_class) = metrics.terminal.failure_class(terminal_error.http_status) {
+        if let Some(failure_class) = metrics.terminal.failure_class(
+            &attempt.failure_classification_rules,
+            terminal_error.http_status,
+        ) {
             record_midstream_terminal_failure(&request.state, &attempt, failure_class).await;
         }
         spawn_request_log_stream_terminal_error(

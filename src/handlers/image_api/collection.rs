@@ -51,10 +51,10 @@ pub(super) async fn collect_image_stream(
     input: ImageStreamInput,
     sink: &mut Option<&mut ImageStreamSink>,
 ) -> AppResult<ImageCollection> {
-    let retry_after_seconds = upstream::parse_retry_after(input.response.headers(), now_ts());
+    let upstream_response = upstream::FailureResponse::from_http(&input.response);
     let pipeline = start_image_pipeline(execution, attempt, prepared, input).await;
     pipeline
-        .collect(&execution.logical_model, sink, retry_after_seconds)
+        .collect(&execution.logical_model, sink, upstream_response)
         .await
 }
 
@@ -191,7 +191,7 @@ impl ImageStreamPipeline {
         mut self,
         model: &str,
         sink: &mut Option<&mut ImageStreamSink>,
-        retry_after_seconds: Option<u16>,
+        upstream_response: upstream::FailureResponse,
     ) -> AppResult<ImageCollection> {
         let mut collected = ImageCollectedEvents::default();
         while let Some(event) = self.events.recv().await {
@@ -210,7 +210,7 @@ impl ImageStreamPipeline {
             None => None,
         };
         let retry_after_seconds = if collected.error.is_none() && !sink_frames_emitted(sink) {
-            retry_after_seconds
+            upstream_response.retry_after_seconds()
         } else {
             None
         };
@@ -218,13 +218,17 @@ impl ImageStreamPipeline {
         if let Err(failure) = &mut result
             && failure.retry
         {
-            let metrics = self.metrics.lock().await;
+            let mut metrics = self.metrics.lock().await;
             let (code, error_type) = metrics.terminal.upstream_error_fields();
             if let Some(code) = code {
                 failure.error.upstream_code = Some(code.to_owned());
             }
             if let Some(error_type) = error_type {
                 failure.error.upstream_type = Some(error_type.to_owned());
+            }
+            failure.error.actual_upstream_status = upstream_response.status();
+            if metrics.terminal.reported_error.is_reported() {
+                failure.error.reported_error = std::mem::take(&mut metrics.terminal.reported_error);
             }
         }
         Ok(ImageCollection {

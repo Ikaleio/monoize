@@ -39,6 +39,8 @@ pub struct SystemSettings {
     #[serde(default)]
     pub dashboard_performance_model_ids: Vec<String>,
     pub monoize_honor_rate_limit: bool,
+    #[serde(default = "default_failure_classification_rules")]
+    pub monoize_failure_classification_rules: Vec<FailureClassificationRule>,
     pub monoize_active_probe_interval_seconds: u64,
     pub monoize_active_probe_success_threshold: u32,
     pub monoize_active_probe_model: Option<String>,
@@ -93,6 +95,168 @@ pub const BUILTIN_REASONING_EFFORT_SUFFIXES: &[(&str, &str)] = &[
     ("-xhigh", "xhigh"),
     ("-max", "max"),
 ];
+
+pub(crate) const FAILURE_CLASSIFICATION_RULES_KEY: &str = "monoize_failure_classification_rules";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryableFailureClass {
+    RateLimited,
+    Transient,
+    Persistent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailureClassificationRule {
+    pub status_codes: Vec<u16>,
+    pub keyword: String,
+    pub class: RetryableFailureClass,
+}
+
+pub(crate) fn default_failure_classification_rules() -> Vec<FailureClassificationRule> {
+    vec![
+        FailureClassificationRule {
+            status_codes: vec![503],
+            keyword: "no available account".to_owned(),
+            class: RetryableFailureClass::Persistent,
+        },
+        FailureClassificationRule {
+            status_codes: Vec::new(),
+            keyword: "no credits remaining".to_owned(),
+            class: RetryableFailureClass::Persistent,
+        },
+    ]
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CompiledFailureRules(std::sync::Arc<[FailureClassificationRule]>);
+
+impl Default for CompiledFailureRules {
+    fn default() -> Self {
+        Self::new(default_failure_classification_rules())
+    }
+}
+
+impl CompiledFailureRules {
+    pub(crate) fn new(mut rules: Vec<FailureClassificationRule>) -> Self {
+        for rule in &mut rules {
+            if rule.keyword.is_ascii() {
+                rule.keyword.make_ascii_lowercase();
+            } else {
+                rule.keyword = simple_lowercase(&rule.keyword);
+            }
+        }
+        Self(rules.into())
+    }
+
+    pub(crate) fn classify(
+        &self,
+        http_status: Option<u16>,
+        fields: [Option<&str>; 3],
+    ) -> Option<RetryableFailureClass> {
+        let mut lowered_fields = [const { std::cell::OnceCell::new() }; 3];
+        self.0.iter().find_map(|rule| {
+            (rule.status_codes.is_empty()
+                || http_status.is_some_and(|status| rule.status_codes.contains(&status)))
+            .then_some(())?;
+            fields
+                .iter()
+                .zip(&mut lowered_fields)
+                .any(|(field, lowered)| {
+                    let Some(field) = field else {
+                        return false;
+                    };
+                    lowered
+                        .get_or_init(|| {
+                            if field
+                                .bytes()
+                                .all(|byte| byte.is_ascii() && !byte.is_ascii_uppercase())
+                            {
+                                std::borrow::Cow::<str>::Borrowed(field)
+                            } else {
+                                std::borrow::Cow::Owned(simple_lowercase(field))
+                            }
+                        })
+                        .contains(&rule.keyword)
+                })
+                .then_some(rule.class)
+        })
+    }
+}
+
+fn simple_lowercase(text: &str) -> String {
+    // U+0130 is the only unconditional full lowercase expansion: its simple mapping is 'i'.
+    text.chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect()
+}
+
+pub(crate) fn parse_failure_classification_rules(
+    value: &serde_json::Value,
+) -> Result<Vec<FailureClassificationRule>, (String, &'static str)> {
+    let key = FAILURE_CLASSIFICATION_RULES_KEY;
+    let rules = value
+        .as_array()
+        .filter(|rules| rules.len() <= 100)
+        .ok_or_else(|| (key.to_owned(), "must be an array of at most 100 rules"))?;
+    rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let path = || format!("{key}[{index}]");
+            let rule = rule
+                .as_object()
+                .ok_or_else(|| (path(), "must be an object"))?;
+            let codes = rule
+                .get("status_codes")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| (format!("{}.status_codes", path()), "must be an array"))?;
+            let mut seen = [false; 500];
+            let mut status_codes = Vec::with_capacity(codes.len().min(seen.len()));
+            for (status_index, code) in codes.iter().enumerate() {
+                let code = code
+                    .as_u64()
+                    .filter(|code| (100..=599).contains(code))
+                    .ok_or_else(|| {
+                        (
+                            format!("{}.status_codes[{status_index}]", path()),
+                            "must be an integer from 100 to 599",
+                        )
+                    })?;
+                if !std::mem::replace(&mut seen[code as usize - 100], true) {
+                    status_codes.push(code as u16);
+                }
+            }
+            let keyword = rule
+                .get("keyword")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|keyword| !keyword.is_empty() && keyword.chars().take(201).count() <= 200)
+                .ok_or_else(|| {
+                    (
+                        format!("{}.keyword", path()),
+                        "must contain 1 to 200 characters after trimming",
+                    )
+                })?;
+            let class = match rule.get("class").and_then(serde_json::Value::as_str) {
+                Some("persistent") => RetryableFailureClass::Persistent,
+                Some("rate_limited") => RetryableFailureClass::RateLimited,
+                Some("transient") => RetryableFailureClass::Transient,
+                _ => {
+                    return Err((
+                        format!("{}.class", path()),
+                        "must be persistent, rate_limited, or transient",
+                    ));
+                }
+            };
+            Ok(FailureClassificationRule {
+                status_codes,
+                keyword: keyword.to_owned(),
+                class,
+            })
+        })
+        .collect()
+}
 
 /// Compact sibling IDs bill as the conversation model (`model-pricing.spec.md` MP-R1).
 pub const OPENAI_COMPACT_PRICING_SUFFIX: &str = "-openai-compact";
@@ -297,6 +461,7 @@ impl Default for SystemSettings {
             dashboard_performance_group_ids: Vec::new(),
             dashboard_performance_model_ids: Vec::new(),
             monoize_honor_rate_limit: false,
+            monoize_failure_classification_rules: default_failure_classification_rules(),
             monoize_active_probe_interval_seconds: 30,
             monoize_active_probe_success_threshold: 1,
             monoize_active_probe_model: None,

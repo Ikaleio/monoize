@@ -51,6 +51,10 @@ pub(super) async fn dispatch_image_attempt(
             && !sink_frames_emitted(sink)
             && let Err(error) = &call.result
             && upstream_rejects_image_streaming(error)
+            && error.reported_error.classify(
+                &slot.attempt.failure_classification_rules,
+                error.failure_response().status(),
+            ) != Some(RetryableFailureClass::Persistent)
             && is_attempt_channel_healthy(execution.context.state, &slot.attempt).await
         {
             let mask = execution

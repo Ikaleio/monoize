@@ -28,6 +28,8 @@ pub struct AppErrorBody {
     pub upstream_type: Option<String>,
     pub upstream_param: Option<String>,
     pub(crate) retry_after_seconds: Option<u16>,
+    pub(crate) reported_error: crate::upstream::UpstreamErrorFields,
+    pub(crate) actual_upstream_status: Option<u16>,
     pub(crate) target_capability: bool,
     /// When set, request logs use this instead of `message` so the client
     /// receives sanitized text while internal logs retain full detail.
@@ -112,6 +114,8 @@ impl AppError {
             upstream_type: None,
             upstream_param: None,
             retry_after_seconds: None,
+            reported_error: crate::upstream::UpstreamErrorFields::default(),
+            actual_upstream_status: None,
             target_capability: false,
             internal_message: None,
             downstream_stream_terminal_sent: false,

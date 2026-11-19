@@ -10,16 +10,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { SystemSettings } from "@/lib/api";
-import { SettingRow, SettingsGroup } from "./settings-layout";
+import { FailureClassificationEditor } from "./failure-classification-editor";
+import type { ClassificationRow, ClassificationRowErrors } from "./failure-classification-rows";
+import { SettingBlock, SettingRow, SettingsGroup } from "./settings-layout";
 import { NumberRow, SwitchRow } from "./settings-rows";
 
 interface RoutingSectionProps {
   settings: SystemSettings;
   onChange: (updates: Partial<SystemSettings>) => void;
+  classificationRows: ClassificationRow[];
+  classificationErrors?: ClassificationRowErrors[];
+  onClassificationChange: (rows: ClassificationRow[]) => void;
+  saving: boolean;
 }
 
 /** Routing reliability: affinity, active probe, passive breaker, and timeouts. */
-export function RoutingSection({ settings, onChange }: RoutingSectionProps) {
+export function RoutingSection({ settings, onChange, classificationRows, classificationErrors, onClassificationChange, saving }: RoutingSectionProps) {
   const { t } = useTranslation();
 
   return (
@@ -130,6 +136,9 @@ export function RoutingSection({ settings, onChange }: RoutingSectionProps) {
             onChange({ monoize_passive_rate_limit_cooldown_seconds })
           }
         />
+        <SettingBlock id="monoize_failure_classification_rules" inRowGroup>
+          <FailureClassificationEditor rows={classificationRows} errors={classificationErrors} disabled={saving} onChange={onClassificationChange} />
+        </SettingBlock>
       </SettingsGroup>
 
       <SettingsGroup id="routing.timeouts">

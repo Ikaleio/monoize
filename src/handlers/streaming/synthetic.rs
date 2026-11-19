@@ -43,6 +43,7 @@ struct BufferedReply {
     req: urp::UrpRequest,
     value: Value,
     forwarded_headers: crate::error::ForwardedHeaders,
+    failure_response: upstream::FailureResponse,
     responses_echo: Option<Value>,
 }
 
@@ -125,7 +126,7 @@ impl StreamForward {
         )
         .await;
         match call {
-            Ok((value, forwarded_headers)) => {
+            Ok((value, forwarded_headers, failure_response)) => {
                 if let (Some(session), Some(upstream_body)) =
                     (self.request.capture.session.as_ref(), capture_upstream_body)
                 {
@@ -143,6 +144,7 @@ impl StreamForward {
                     req: nonstream_req,
                     value,
                     forwarded_headers,
+                    failure_response,
                     responses_echo,
                 };
                 self.accept_buffered_reply(attempt, plan, reply).await
@@ -175,6 +177,7 @@ impl StreamForward {
             req,
             value,
             forwarded_headers,
+            failure_response,
             responses_echo,
         } = reply;
         update_pending_channel_info(
@@ -195,6 +198,7 @@ impl StreamForward {
             Ok(resp) => resp,
             Err(mut err) => {
                 err.forwarded_headers = forwarded_headers;
+                err.actual_upstream_status = failure_response.status();
                 let passive_failure_class = classify_retryable_app_failure(&err);
                 return Ok(SlotOutcome::Failed {
                     error: err,

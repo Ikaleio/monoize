@@ -653,6 +653,7 @@ pub(super) async fn collect_provider_attempts(
             recovery_mode: channel_recovery_mode(state, channel.provider_type),
             channel_max_retries: provider.channel_max_retries,
             channel_retry_interval_ms: provider.channel_retry_interval_ms.max(0) as u64,
+            failure_classification_rules: runtime.failure_classification_rules.clone(),
             circuit_breaker_enabled: provider.circuit_breaker_enabled,
             per_model_circuit_break: provider.per_model_circuit_break,
             provider_attempt_limit,
@@ -1435,13 +1436,6 @@ fn status_allows_same_channel_retry(status: StatusCode) -> bool {
         || status.is_server_error()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RetryableFailureClass {
-    RateLimited,
-    Transient,
-    Persistent,
-}
-
 pub(super) fn classify_retryable_failure(err: &UpstreamCallError) -> Option<RetryableFailureClass> {
     let network = matches!(err.kind, UpstreamErrorKind::Network);
     (network || err.status.is_some_and(status_allows_same_channel_retry)).then(|| {
@@ -1547,25 +1541,20 @@ pub(crate) fn classify_channel_health_failure(
 pub(super) async fn record_channel_failure(
     state: &AppState,
     attempt: &MonoizeAttempt,
-    app_err: &AppError,
-    passive_failure_class: Option<RetryableFailureClass>,
+    failure_class: Option<RetryableFailureClass>,
+    blast_status: Option<u16>,
+    retry_after_seconds: Option<u16>,
 ) -> bool {
-    let Some(failure_class) = passive_failure_class.or_else(|| {
-        classify_channel_health_failure(
-            app_err.upstream_status,
-            app_err.upstream_code.as_deref(),
-            app_err.upstream_type.as_deref(),
-        )
-    }) else {
+    let Some(failure_class) = failure_class else {
         return false;
     };
-    let shared_origin_blast = failure_class == RetryableFailureClass::Transient
-        && is_shared_origin_status(app_err.upstream_status);
+    let shared_origin_blast =
+        failure_class == RetryableFailureClass::Transient && is_shared_origin_status(blast_status);
     let unhealthy = record_passive_samples(
         state,
         attempt,
         failure_class,
-        app_err.retry_after_seconds,
+        retry_after_seconds,
         shared_origin_blast,
     )
     .await;
@@ -1742,8 +1731,12 @@ fn apply_retryable_failure_to_channel(
     }
     true
 }
-pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info: bool) -> AppError {
+pub(super) fn upstream_error_to_app(
+    mut err: UpstreamCallError,
+    mask_sensitive_info: bool,
+) -> AppError {
     let status = err.status.unwrap_or(StatusCode::BAD_GATEWAY);
+    let failure_response = err.failure_response();
     // SAN-3: the raw unmasked upstream detail (transport text with the full
     // upstream URL, raw unparsed error bodies) exists in the server log only.
     tracing::warn!(status = %status, upstream_error = %err.message, "upstream request failed");
@@ -1780,7 +1773,7 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
         "upstream status {status}: {}",
         crate::error_sanitize::truncate_error_detail(&err.message)
     );
-    let forwarded_headers = err.forwarded_headers.into_vec();
+    let forwarded_headers = err.take_forwarded_headers();
     let mut app_err = AppError::new(status, "upstream_error", client_message)
         .with_internal_message(internal_message)
         .with_upstream_error(
@@ -1796,7 +1789,8 @@ pub(super) fn upstream_error_to_app(err: UpstreamCallError, mask_sensitive_info:
         app_err = app_err.with_param(param);
     }
     app_err.forwarded_headers = forwarded_headers;
-    app_err.retry_after_seconds = err.retry_after_seconds;
+    failure_response.apply(&mut app_err);
+    app_err.reported_error = err.reported_error;
     app_err
 }
 

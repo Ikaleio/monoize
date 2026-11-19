@@ -371,6 +371,14 @@ export const SETTING_ENTRIES = [
     fields: ["monoize_passive_rate_limit_cooldown_seconds"],
   },
   {
+    id: "monoize_failure_classification_rules",
+    group: "routing.passive",
+    labelKey: "settings.failureClassificationRules",
+    descriptionKey: "settings.failureClassificationRulesDescription",
+    keywordsKey: "settings.keywordsBreaker",
+    fields: ["monoize_failure_classification_rules"],
+  },
+  {
     id: "monoize_request_timeout_ms",
     group: "routing.timeouts",
     labelKey: "settings.requestTimeoutMs",

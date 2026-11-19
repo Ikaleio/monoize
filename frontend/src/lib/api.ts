@@ -303,6 +303,14 @@ export interface UpdateApiKeyInput {
   request_capture_retention?: RequestCaptureRetention;
 }
 
+export type FailureClass = "persistent" | "rate_limited" | "transient";
+
+export interface FailureClassificationRule {
+  status_codes: number[];
+  keyword: string;
+  class: FailureClass;
+}
+
 export interface SystemSettings {
   registration_enabled: boolean;
   captcha_enabled: boolean;
@@ -330,6 +338,7 @@ export interface SystemSettings {
   monoize_passive_window_seconds: number;
   monoize_honor_rate_limit: boolean;
   monoize_passive_rate_limit_cooldown_seconds: number;
+  monoize_failure_classification_rules: FailureClassificationRule[];
   monoize_request_timeout_ms: number;
   monoize_stream_idle_timeout_ms: number;
   monoize_enable_estimated_billing: boolean;

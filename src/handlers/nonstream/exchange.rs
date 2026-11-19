@@ -60,7 +60,7 @@ pub(super) enum Exchange {
 #[allow(clippy::large_enum_variant)]
 pub(super) enum Reply {
     /// A provider JSON body to decode.
-    Body(Value),
+    Body(Value, upstream::FailureResponse),
     /// A stream-collected terminal response and the model the stream reported.
     Collected {
         response: urp::UrpResponse,
@@ -220,7 +220,7 @@ impl NonstreamRun<'_> {
         )
         .await;
         Ok(match result {
-            Ok(value) => Exchange::Reply(Reply::Body(value)),
+            Ok(value) => Exchange::Reply(Reply::Body(value, upstream::FailureResponse::default())),
             Err(err) => Exchange::CallFailed(err),
         })
     }
@@ -254,9 +254,9 @@ impl NonstreamRun<'_> {
         )
         .await;
         Ok(match result {
-            Ok((value, headers)) => {
+            Ok((value, headers, failure_response)) => {
                 call.forwarded_headers = headers;
-                Exchange::Reply(Reply::Body(value))
+                Exchange::Reply(Reply::Body(value, failure_response))
             }
             Err(err) => Exchange::CallFailed(err),
         })
@@ -277,9 +277,15 @@ async fn collect_streamed_upstream_response(
     logical_model: &str,
     stream_idle_timeout_ms: u64,
 ) -> Result<(urp::UrpResponse, Option<String>), CollectedUpstreamError> {
-    let retry_after_seconds = upstream::parse_retry_after(upstream_resp.headers(), now_ts());
+    let upstream_response = upstream::FailureResponse::from_http(&upstream_resp);
     let (decoded_tx, mut decoded_rx) = mpsc::channel::<crate::urp::UrpStreamEvent>(64);
-    let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics::default()));
+    let runtime_metrics = Arc::new(Mutex::new(StreamRuntimeMetrics {
+        terminal: StreamTerminalDiagnostics {
+            upstream_response,
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
     let decode_handle = {
         let runtime_metrics = runtime_metrics.clone();
         crate::payload::spawn(async move {
@@ -348,24 +354,26 @@ async fn collect_streamed_upstream_response(
             e.to_string(),
         ))
     })?;
-    let metrics = runtime_metrics.lock().await;
+    let mut metrics = runtime_metrics.lock().await;
     if let Some(terminal) = metrics.terminal.terminal_error.as_ref() {
         let (code, error_type) = metrics.terminal.upstream_error_fields();
         let error = stream_error.or_else(|| decoded.err()).unwrap_or_else(|| {
             AppError::new(StatusCode::BAD_GATEWAY, &terminal.code, &terminal.message)
         });
-        return Err(CollectedUpstreamError::Upstream(error.with_upstream_error(
+        let mut error = error.with_upstream_error(
             None,
             code.map(str::to_owned),
             error_type.map(str::to_owned),
             terminal.param.clone(),
-        )));
+        );
+        metrics.terminal.apply_failure_evidence(&mut error);
+        return Err(CollectedUpstreamError::Upstream(error));
     }
     if let Some(err) = stream_error {
         return Err(CollectedUpstreamError::Upstream(err));
     }
     decoded.map_err(|mut error| {
-        error.retry_after_seconds = retry_after_seconds;
+        error.retry_after_seconds = upstream_response.retry_after_seconds();
         CollectedUpstreamError::Upstream(error)
     })?;
     let observed_response_model = metrics.response_model.clone();
@@ -377,7 +385,7 @@ async fn collect_streamed_upstream_response(
                 "upstream_stream_error",
                 "stream completed without terminal response",
             );
-            error.retry_after_seconds = retry_after_seconds;
+            error.retry_after_seconds = upstream_response.retry_after_seconds();
             CollectedUpstreamError::Upstream(error)
         })
 }

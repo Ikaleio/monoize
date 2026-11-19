@@ -101,8 +101,8 @@ Standard waterfall routing applies (§ database-provider-routing.spec.md):
 - Provider eligibility: enabled, model exists, multiplier ceiling, group eligibility.
 - Channel eligibility: enabled, weight > 0, and not effectively unhealthy when the Provider circuit breaker is enabled (R-CH-1).
 - Weighted channel shuffle.
-- Same-Channel retry and fail-forward follow `monoize-upstream-routing.spec.md` RTA-5. A Persistent failure, including a billing-exhaustion HTTP `429`, MUST NOT retry the same Channel.
-- Passive health classification follows `monoize-upstream-routing.spec.md` RTA-5a through RTA-6. In particular, an upstream 401 or 403 does not retry the same Channel but does trip its breaker immediately.
+- Same-Channel retry and fail-forward follow `monoize-upstream-routing.spec.md` RTA-5. A final Persistent failure MUST NOT retry the same Channel.
+- Passive health classification follows `monoize-upstream-routing.spec.md` RTA-5a through RTA-6. Without a custom rule match, upstream HTTP `401`, HTTP `403`, and billing-exhaustion HTTP `429` are Persistent and trip an enabled breaker immediately.
 
 ## 7. Timed Recovery
 

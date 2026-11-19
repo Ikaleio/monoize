@@ -3,7 +3,7 @@
 use super::state::ChatStreamState;
 use crate::error::AppResult;
 use crate::handlers::StreamTerminalError;
-use crate::handlers::usage::record_stream_terminal_error;
+use crate::handlers::usage::record_stream_upstream_terminal_error;
 use crate::urp::{CHAT_ERROR_EVENT_EXTRA_KEY, UrpStreamEvent};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -21,6 +21,9 @@ impl ChatStreamState<'_> {
         error: Option<Value>,
     ) -> AppResult<()> {
         let native = error.as_ref();
+        let reported_error = native
+            .map(crate::upstream::UpstreamErrorFields::from_json)
+            .unwrap_or_default();
         let code = native
             .and_then(|error| error_scalar(error, "code", "provider_code"))
             .unwrap_or_else(|| fallback_code.to_string());
@@ -76,7 +79,7 @@ impl ChatStreamState<'_> {
             extra_body,
         })
         .await?;
-        record_stream_terminal_error(
+        record_stream_upstream_terminal_error(
             &self.runtime_metrics,
             "chat.completion.error",
             StreamTerminalError {
@@ -86,6 +89,9 @@ impl ChatStreamState<'_> {
                 error_type,
                 param,
             },
+            None,
+            None,
+            reported_error,
         )
         .await;
         Ok(())

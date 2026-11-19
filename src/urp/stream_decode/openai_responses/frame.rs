@@ -5,8 +5,8 @@ use super::state::{Flow, ResponsesStreamDecoder};
 use crate::handlers::usage::{
     mark_stream_ttfb_if_needed, parse_usage_from_responses_object,
     record_observed_upstream_response_model, record_stream_done_sentinel,
-    record_stream_response_id, record_stream_response_service_tier, record_stream_terminal_error,
-    record_stream_terminal_event, record_stream_usage_if_present,
+    record_stream_response_id, record_stream_response_service_tier, record_stream_terminal_event,
+    record_stream_upstream_terminal_error, record_stream_usage_if_present,
 };
 use crate::payload::sse::FrameData;
 use crate::urp::decode::openai_responses::parse_usage_from_responses;
@@ -75,17 +75,27 @@ impl ResponsesStreamDecoder {
             let envelope = json!({
                 "error": { "code": code, "type": "upstream_protocol_error", "message": message }
             });
-            return self.fail_native(code, "error", &envelope).await;
+            return self.fail_native(code, "error", &envelope, false).await;
         }
         self.observe(&event_name, &data).await;
         let bare_error = data.get("error").is_some_and(|error| !error.is_null())
             && data.get("response").is_none();
         if event_name == "error" || bare_error {
-            return self.fail_native(&event_name, &event_name, &data).await;
+            return self
+                .fail_native(&event_name, &event_name, &data, true)
+                .await;
         }
         if event_name == "response.failed" {
-            let error = native_error(&event_name, &data);
-            record_stream_terminal_error(&self.metrics, &event_name, error.terminal).await;
+            let error = native_error(&event_name, &data, true);
+            record_stream_upstream_terminal_error(
+                &self.metrics,
+                &event_name,
+                error.terminal,
+                None,
+                None,
+                error.reported_error,
+            )
+            .await;
         }
         if is_terminal(&event_name) {
             return self.on_terminal(event_name, &data).await;

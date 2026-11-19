@@ -147,7 +147,7 @@ R-MDL-3. The available-model-name query used by `/v1/models` MUST return sorted 
 
 R-ERR-1. Every upstream HTTP, timeout, connection, response-decoding, or response-validation error before the first downstream byte MUST fail the current attempt. The router MUST continue routing until an attempt succeeds or all eligible attempts are exhausted.
 
-R-ERR-2. A failure that is not Persistent under R-ERR-6 is eligible for a same-Channel retry if it has one of these outcomes:
+R-ERR-2. Under the existing built-in retry gate, a non-Persistent failure is eligible for a same-Channel retry only if it has one of these outcomes:
 
 - HTTP `408`
 - HTTP `429`
@@ -155,13 +155,13 @@ R-ERR-2. A failure that is not Persistent under R-ERR-6 is eligible for a same-C
 - timeout
 - connection refused/reset
 
-R-ERR-3. For a same-Channel retry error, the router MAY retry that Channel within R-CH-3 through R-CH-8.
+R-ERR-3. The router MAY retry the same Channel only if the built-in retry gate in R-ERR-2 permits it and the final class under R-ERR-6 is not Persistent. Apply R-CH-3 through R-CH-8 and `monoize-upstream-routing.spec.md` RTA-4a. A custom rule can prohibit a same-Channel retry by assigning Persistent but MUST NOT make a previously ineligible retry eligible.
 
 R-ERR-4. For any other upstream error, the router MUST NOT retry the same Channel. The router MUST advance to the next eligible Channel or Provider.
 
 R-ERR-5. A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing unless it is a target-capability failure under R-ERR-7.
 
-R-ERR-6. Classify Persistent, RateLimited, and Transient failures per RTA-5a and RTA-5b in `monoize-upstream-routing.spec.md`. For HTTP `429`, either normalized structured field matching `insufficient_quota`, `credit_balance_exhausted`, `credit_balance_too_low`, `insufficient_balance`, or `billing_hard_limit_reached` makes the failure Persistent. Every other HTTP `429` is RateLimited. `quota_exceeded` does not override HTTP `429`. Persistent failures MUST NOT retry the same Channel and MUST trip the relevant key under R-H-4 when its breaker is enabled. HTTP `400`, `409`, and `422` without a listed signal MUST NOT update Channel health.
+R-ERR-6. Classify failures per RTA-5a, RTA-5b, and RTA-5f in `monoize-upstream-routing.spec.md`. For an upstream-reported failure, the first matching `monoize_failure_classification_rules` entry determines the final class; otherwise use the built-in classifier. A Persistent final class MUST NOT retry the same Channel and MUST trip the relevant key under R-H-4 when its breaker is enabled. An HTTP `400`, `409`, or `422` without a built-in signal MUST NOT update health unless a custom rule matches. Only a final Transient failure may qualify for the shared-origin blast under RTA-6c.
 
 R-ERR-7. A target-capability rejection from `media-transport.spec.md` MT20a MUST fail only its selected attempt, before upstream dispatch. Record one `tried_providers` entry with the original diagnostic. Do not retry the same Channel, record passive health, or clear affinity. Continue with the next eligible Channel or Provider. If the last attempt fails this way, keep its status, code, and message under `monoize-upstream-routing.spec.md` RTA-5e and RTA-8c.
 
@@ -194,7 +194,7 @@ R-H-7. The primary scheduler MUST target only unhealthy keys in `probe` mode who
 
 R-H-8. If `provider.circuit_breaker_enabled = false`, the scheduler MUST NOT probe that Provider, passive health state MUST NOT be updated for its forwarding attempts, and routing MUST ignore its runtime health state.
 
-R-H-9. Before returning success for a mutation of a passive-health setting, `monoize_honor_rate_limit`, or any probe setting in `monoize-upstream-routing.spec.md` CFG-3 (including `monoize_active_probe_stream`), the server MUST advance the routing configuration revision and clear all process-local Channel health entries.
+R-H-9. Before returning success for a mutation of a passive-health setting, `monoize_honor_rate_limit`, `monoize_failure_classification_rules`, or any probe setting in `monoize-upstream-routing.spec.md` CFG-3 (including `monoize_active_probe_stream`), the server MUST advance the routing configuration revision and clear all process-local Channel health entries.
 
 R-H-10. A request or active probe captured under an older routing configuration revision MUST NOT publish a health-state update after the revision advances.
 
