@@ -214,7 +214,19 @@ impl ImageStreamPipeline {
         } else {
             None
         };
-        let result = collected.finish(decode_result, transform_result, retry_after_seconds);
+        let mut result = collected.finish(decode_result, transform_result, retry_after_seconds);
+        if let Err(failure) = &mut result
+            && failure.retry
+        {
+            let metrics = self.metrics.lock().await;
+            let (code, error_type) = metrics.terminal.upstream_error_fields();
+            if let Some(code) = code {
+                failure.error.upstream_code = Some(code.to_owned());
+            }
+            if let Some(error_type) = error_type {
+                failure.error.upstream_type = Some(error_type.to_owned());
+            }
+        }
         Ok(ImageCollection {
             result,
             metrics: self.metrics,

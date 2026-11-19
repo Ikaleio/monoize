@@ -816,6 +816,8 @@
 		"testChannelDesc": "{{provider}} の Channel {{channel}} をテスト",
 		"testing": "テスト中...",
 		"testFailed": "失敗",
+		"testStreamErrorHttp": "ストリーム内エラー · HTTP {{status}}",
+		"testResponseBodyErrorHttp": "レスポンス本文エラー · HTTP {{status}}",
 		"testIdle": "未テスト",
 		"streamTest": "ストリーミング応答",
 		"streamTestDesc": "対応するモデルにストリーミング応答を要求します。リクエスト変換は上流の応答モードを変更できます。",

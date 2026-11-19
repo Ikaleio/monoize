@@ -2,6 +2,7 @@ use super::*;
 use crate::handlers::channel_probe::{
     ChannelProbeOutcome, ProbeRequestSettings, prepare_channel_probe,
 };
+use crate::handlers::routing::RetryableFailureClass;
 use crate::monoize_routing::{
     ChannelProbe, MonoizeChannel, MonoizeProvider, MonoizeProviderType, RecoveryMode,
     recovery_deadline, recovery_wait, select_channel_probe_model,
@@ -419,7 +420,7 @@ impl ProbeTick<'_> {
             recovery_wait(
                 job.interval,
                 job.rate_limit_wait,
-                outcome.rate_limited,
+                outcome.failure_class == Some(RetryableFailureClass::RateLimited),
                 outcome.retry_after_seconds,
             )
         };

@@ -110,6 +110,7 @@ pub(super) fn image_upstream_error(
     param: Option<&str>,
     status: Option<u64>,
 ) -> AppError {
+    let reported_code = code.map(str::to_owned);
     let code = code.unwrap_or("upstream_error");
     let status = status
         .filter(|v| (400..=599).contains(v))
@@ -127,7 +128,8 @@ pub(super) fn image_upstream_error(
             _ => StatusCode::BAD_GATEWAY,
         });
     let mut err = AppError::new(status, code, message)
-        .with_type(kind.unwrap_or_else(|| openai_error_type_for_status(status)));
+        .with_type(kind.unwrap_or_else(|| openai_error_type_for_status(status)))
+        .with_upstream_error(None, reported_code, kind.map(str::to_owned), None);
     err.param = param.map(str::to_owned);
     err
 }

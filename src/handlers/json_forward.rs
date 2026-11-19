@@ -124,8 +124,7 @@ async fn call_json_attempt(
     Ok(match result {
         Ok(value) => Ok(value),
         Err(error) => {
-            let class =
-                is_same_channel_retryable_error(&error).then(|| classify_retryable_failure(&error));
+            let class = classify_retryable_failure(&error);
             let mask = state.monoize_runtime.read().await.mask_sensitive_info;
             Err(JsonAttemptFailure {
                 error: upstream_error_to_app(error, mask),

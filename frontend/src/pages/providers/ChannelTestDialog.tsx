@@ -39,6 +39,7 @@ import type { ProviderType } from '@/lib/api'
 import {
 	CHANNEL_TEST_CONCURRENCY,
 	ChannelTestContext,
+	channelTestFailureHttpLabel,
 	useChannelTests,
 	type ChannelTestContextValue,
 	type ChannelTestRun,
@@ -148,6 +149,7 @@ export function ChannelTestProvider({ children }: { children: React.ReactNode })
 					status: result.success ? 'passed' : 'failed',
 					latency_ms: result.latency_ms,
 					http_status: result.http_status,
+					stream: result.stream,
 					error_code: result.error_code,
 					error_type: result.error_type,
 					error: result.error ?? undefined
@@ -339,6 +341,9 @@ function ChannelTestDialog({
 							itemContent={(_index, model) => {
 								const state = results[model]
 								const status = state?.status ?? 'idle'
+								const httpLabel = state?.status === 'failed'
+									? channelTestFailureHttpLabel(t, state.http_status, state.stream === true)
+									: null
 								return (
 									<div className='flex flex-col border-b last:border-b-0'>
 										<div className='flex min-h-11 items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50'>
@@ -385,12 +390,12 @@ function ChannelTestDialog({
 												: 	<Zap aria-hidden='true' />}
 											</Button>
 										</div>
-										{status === 'failed' && state?.error && (
+										{state?.status === 'failed' && (state.error || httpLabel) && (
 											<div className='flex items-start gap-2 border-t bg-error-soft px-3 py-2'>
 												<div className='flex min-w-0 flex-1 flex-col gap-1'>
 													<div className='flex flex-wrap items-center gap-1.5'>
-														{state.http_status != null && (
-															<Badge variant='outline'>HTTP {state.http_status}</Badge>
+														{httpLabel && (
+															<Badge variant='outline'>{httpLabel}</Badge>
 														)}
 														{state.error_code && (
 															<Badge variant='outline' className='font-mono'>
@@ -403,11 +408,13 @@ function ChannelTestDialog({
 															</Badge>
 														)}
 													</div>
-													<code className='break-words whitespace-pre-wrap font-mono text-sm leading-relaxed text-error-foreground'>
-														{state.error}
-													</code>
+													{state.error && (
+														<code className='break-words whitespace-pre-wrap font-mono text-sm leading-relaxed text-error-foreground'>
+															{state.error}
+														</code>
+													)}
 												</div>
-												<CopyButton value={state.error} label={t('providers.copyTestError')} />
+												{state.error && <CopyButton value={state.error} label={t('providers.copyTestError')} />}
 											</div>
 										)}
 									</div>

@@ -1,23 +1,57 @@
 use crate::app::AppState;
-use crate::handlers::routing::health_key;
+use crate::handlers::channel_probe::ChannelProbeOutcome;
+use crate::handlers::routing::{channel_recovery_mode, health_key, now_ts};
 use crate::monoize_routing::{ChannelHealthState, MonoizeChannel, MonoizeProvider};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
-pub(super) fn reset_channel_health_after_successful_test(
-    health: &mut HashMap<String, ChannelHealthState>,
-    channel_id: &str,
-    per_model_circuit_break: bool,
+pub(super) async fn record_channel_test_health(
+    state: &AppState,
+    provider: &MonoizeProvider,
+    channel: &MonoizeChannel,
     model_id: &str,
-    now: i64,
-    max_entries: usize,
+    revision: u64,
+    outcome: &ChannelProbeOutcome,
 ) {
-    let key = health_key(channel_id, per_model_circuit_break.then_some(model_id));
-    if !health.contains_key(&key) && health.len() >= max_entries {
+    if !(outcome.ok || (provider.circuit_breaker_enabled && outcome.is_persistent_failure())) {
         return;
     }
-    health.entry(key).or_default().mark_success(now);
+    let mut health = state.channel_health.lock().await;
+    if state.routing_config_revision.load(Ordering::Acquire) != revision {
+        return;
+    }
+    let key = health_key(
+        &channel.id,
+        provider.per_model_circuit_break.then_some(model_id),
+    );
+    if !crate::monoize_routing::prepare_channel_health_insert(&mut health, &key) {
+        return;
+    }
+    if outcome.ok {
+        health.entry(key).or_default().mark_success(now_ts());
+        return;
+    }
+    let mode = channel_recovery_mode(state, channel.provider_type);
+    let ordinary_wait = {
+        let runtime = state.monoize_runtime.read().await;
+        mode.ordinary_wait(
+            runtime.probe_interval(provider, channel),
+            runtime.passive_cooldown(channel),
+        )
+    };
+    let now = now_ts();
+    let entry = health.entry(key).or_default();
+    if !entry.is_unhealthy(now) {
+        entry.trip(
+            now,
+            mode,
+            ordinary_wait,
+            None,
+            false,
+            outcome.retry_after_seconds,
+        );
+    }
 }
 
 fn health_timestamp(ts: Option<i64>) -> Option<String> {

@@ -147,7 +147,7 @@ R-MDL-3. The available-model-name query used by `/v1/models` MUST return sorted 
 
 R-ERR-1. Every upstream HTTP, timeout, connection, response-decoding, or response-validation error before the first downstream byte MUST fail the current attempt. The router MUST continue routing until an attempt succeeds or all eligible attempts are exhausted.
 
-R-ERR-2. Same-Channel retry errors are:
+R-ERR-2. A failure that is not Persistent under R-ERR-6 is eligible for a same-Channel retry if it has one of these outcomes:
 
 - HTTP `408`
 - HTTP `429`
@@ -161,7 +161,7 @@ R-ERR-4. For any other upstream error, the router MUST NOT retry the same Channe
 
 R-ERR-5. A Monoize authentication, authorization, balance, request-validation, request-encoding, transform, billing, or internal error MUST stop routing unless it is a target-capability failure under R-ERR-7.
 
-R-ERR-6. Persistent Channel failure statuses and structured signals, RateLimited structured signals, and Transient structured signals MUST equal RTA-5a and RTA-5b in `monoize-upstream-routing.spec.md`. Persistent failures MUST NOT retry the same Channel and MUST make the relevant health entry unhealthy after the first occurrence. HTTP `400`, `409`, and `422` without a listed signal MUST NOT update Channel health.
+R-ERR-6. Classify Persistent, RateLimited, and Transient failures per RTA-5a and RTA-5b in `monoize-upstream-routing.spec.md`. For HTTP `429`, either normalized structured field matching `insufficient_quota`, `credit_balance_exhausted`, `credit_balance_too_low`, `insufficient_balance`, or `billing_hard_limit_reached` makes the failure Persistent. Every other HTTP `429` is RateLimited. `quota_exceeded` does not override HTTP `429`. Persistent failures MUST NOT retry the same Channel and MUST trip the relevant key under R-H-4 when its breaker is enabled. HTTP `400`, `409`, and `422` without a listed signal MUST NOT update Channel health.
 
 R-ERR-7. A target-capability rejection from `media-transport.spec.md` MT20a MUST fail only its selected attempt, before upstream dispatch. Record one `tried_providers` entry with the original diagnostic. Do not retry the same Channel, record passive health, or clear affinity. Continue with the next eligible Channel or Provider. If the last attempt fails this way, keep its status, code, and message under `monoize-upstream-routing.spec.md` RTA-5e and RTA-8c.
 
@@ -184,7 +184,7 @@ R-H-2. Effective passive breaker parameters MUST be resolved per Channel: Channe
 
 R-H-3. Health state MUST be keyed by `channel_id` when `per_model_circuit_break == false`, or by `(channel_id, logical_model)` when `per_model_circuit_break == true`.
 
-R-H-4. A Persistent failure defined by R-ERR-6 MUST mark the health state entry unhealthy immediately. A Transient or RateLimited failure MUST mark it unhealthy when the count of failed samples within the sliding window (`window_seconds`) reaches the effective threshold defined by R-H-15.
+R-H-4. With the Provider circuit breaker enabled, a Persistent forwarding failure under R-ERR-6 MUST trip the relevant healthy key immediately. A Transient or RateLimited forwarding failure MUST trip the relevant healthy key when its count of failed samples within the sliding window (`window_seconds`) reaches the effective threshold defined by R-H-15. A Persistent dashboard Channel test failure MUST trip only its tested key under the guards in `monoize-upstream-routing.spec.md` PHS-8. Other dashboard test failures MUST NOT change health.
 
 R-H-5. A passive trip MUST record the trip fields and set the initial `next_recovery_at` per `monoize-upstream-routing.spec.md` PHS-4 and PHS-5. Only a RateLimited trip with effective `honor_rate_limit = true` uses the greater of `rate_limit_cooldown_seconds` and the parsed Retry-After (or `0` seconds when absent).
 

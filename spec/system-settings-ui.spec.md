@@ -124,9 +124,10 @@ the Active Probe group (`routing.probe`). Render `monoize_active_probe_stream` a
 switch that defaults to on. In the Passive Breaker group (`routing.passive`), render
 `monoize_honor_rate_limit` as a switch immediately before
 `monoize_passive_rate_limit_cooldown_seconds`. The switch defaults to off. Its
-description MUST state that this setting controls whether HTTP 429 and other rate-limit
-trips wait the rate-limit cooldown or a longer Retry-After before the first probe or
-timed recovery. The `monoize_passive_cooldown_seconds` description MUST state that this
+description MUST state that this setting controls whether RateLimited trips wait the
+rate-limit cooldown or a longer Retry-After before the first probe or timed recovery.
+HTTP 429 with a billing-exhaustion signal is Persistent, not RateLimited (RTA-5a).
+The `monoize_passive_cooldown_seconds` description MUST state that this
 setting sets the timed-recovery wait for Replicate Channels and Channels on replica
 nodes. It MUST also state that timed recovery uses this wait for rate-limit trips when
 honor-rate-limit is off.

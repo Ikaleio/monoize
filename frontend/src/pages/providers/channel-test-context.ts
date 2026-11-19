@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { TFunction } from 'i18next'
 import type { ApiTypeOverride, ProviderType } from '@/lib/api'
 
 // CP-FE-9: client-side concurrency cap for "concurrent" runs, shown in the UI.
@@ -8,9 +9,16 @@ export type ModelTestResult = {
 	status: 'testing' | 'passed' | 'failed'
 	latency_ms?: number
 	http_status?: number | null
+	stream?: boolean
 	error_code?: string | null
 	error_type?: string | null
 	error?: string
+}
+
+export function channelTestFailureHttpLabel(t: TFunction, status: number | null | undefined, stream: boolean): string | null {
+	if (status == null) return null
+	if (status < 200 || status > 299) return `HTTP ${status}`
+	return t(stream ? 'providers.testStreamErrorHttp' : 'providers.testResponseBodyErrorHttp', { status })
 }
 
 export type RunMode = 'sequential' | 'concurrent'

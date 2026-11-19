@@ -108,6 +108,13 @@ impl MonoizeRuntimeConfig {
             })
     }
 
+    pub fn passive_cooldown(&self, channel: &MonoizeChannel) -> u64 {
+        channel
+            .passive_cooldown_seconds_override
+            .unwrap_or(self.passive_cooldown_seconds)
+            .max(1)
+    }
+
     pub fn probe_interval(&self, provider: &MonoizeProvider, channel: &MonoizeChannel) -> u64 {
         channel
             .active_probe_interval_seconds_override
@@ -153,6 +160,15 @@ pub struct ChannelHealthState {
 pub enum RecoveryMode {
     Probe,
     Timed,
+}
+
+impl RecoveryMode {
+    pub fn ordinary_wait(self, probe_interval: u64, passive_cooldown: u64) -> u64 {
+        match self {
+            Self::Probe => probe_interval,
+            Self::Timed => passive_cooldown,
+        }
+    }
 }
 
 pub fn recovery_deadline(now: i64, wait_seconds: u64) -> i64 {
@@ -345,10 +361,12 @@ impl ChannelHealthState {
         &mut self,
         now: i64,
         mode: RecoveryMode,
+        ordinary_wait: u64,
+        rate_limit_wait: Option<u64>,
         rate_limited: bool,
         retry_after: Option<u16>,
-        wait: u64,
-    ) {
+    ) -> u64 {
+        let wait = recovery_wait(ordinary_wait, rate_limit_wait, rate_limited, retry_after);
         static NEXT_TRIP_ID: AtomicU64 = AtomicU64::new(1);
         let trip_id = NEXT_TRIP_ID.fetch_add(1, Ordering::Relaxed);
         self.healthy = false;
@@ -360,5 +378,6 @@ impl ChannelHealthState {
         self.next_recovery_at = Some(recovery_deadline(now, wait));
         self.probe_success_count = 0;
         self.last_probe_at = None;
+        wait
     }
 }

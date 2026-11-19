@@ -1,4 +1,3 @@
-use super::routing::{RetryableFailureClass, classify_channel_health_failure};
 use super::{StreamRuntimeMetrics, StreamTerminalError};
 use crate::urp;
 use serde_json::{Map, Value};
@@ -346,10 +345,11 @@ pub(crate) async fn record_stream_upstream_terminal_error(
         return;
     };
     let mut guard = runtime_metrics.lock().await;
-    guard.upstream_terminal_rate_limited = matches!(
-        classify_channel_health_failure(None, code, error_type),
-        Some(RetryableFailureClass::RateLimited)
-    );
+    // Some protocol decoders use one field for the displayed code instead of retaining both.
+    guard.terminal.upstream_error_code = code.filter(|code| *code != error.code).map(str::to_owned);
+    guard.terminal.upstream_error_type = error_type
+        .filter(|value| Some(*value) != error.error_type.as_deref())
+        .map(str::to_owned);
     guard.terminal.terminal_event = Some(event.to_string());
     guard.terminal.terminal_error = Some(error);
 }

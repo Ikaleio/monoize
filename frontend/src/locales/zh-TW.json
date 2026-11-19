@@ -816,6 +816,8 @@
 		"testChannelDesc": "測試 {{provider}} 的 Channel {{channel}}",
 		"testing": "測試中...",
 		"testFailed": "失敗",
+		"testStreamErrorHttp": "串流內錯誤 · HTTP {{status}}",
+		"testResponseBodyErrorHttp": "回應本文錯誤 · HTTP {{status}}",
 		"testIdle": "未測試",
 		"streamTest": "串流回應",
 		"streamTestDesc": "為支援串流測試的模型請求串流回應。請求轉換可以改變送往上游的模式。",

@@ -23,10 +23,17 @@ pub(crate) struct ChannelProbeOutcome {
     pub usage: Option<urp::Usage>,
     pub http_status: Option<u16>,
     pub retry_after_seconds: Option<u16>,
-    pub rate_limited: bool,
+    pub failure_class: Option<RetryableFailureClass>,
+    timed_out: bool,
     pub error_code: Option<String>,
     pub error_type: Option<String>,
     pub error: Option<String>,
+}
+
+impl ChannelProbeOutcome {
+    pub(crate) fn is_persistent_failure(&self) -> bool {
+        !self.timed_out && self.failure_class == Some(RetryableFailureClass::Persistent)
+    }
 }
 
 pub(crate) struct ProbeFailure {
@@ -106,6 +113,7 @@ impl PreparedProbe {
         )
         .await
         .unwrap_or_else(|_| {
+            response.timed_out = true;
             let detail = format!("upstream probe timed out after {timeout_ms}ms");
             let message = match response.status.filter(|status| !status.is_success()) {
                 Some(status) => format!("{} ({detail})", format_probe_http_error(status, "")),
@@ -139,7 +147,8 @@ impl PreparedProbe {
         meta.status = Some(status);
         meta.retry_after_seconds = upstream::parse_retry_after(response.headers(), now_ts());
         if !status.is_success() {
-            let body = upstream::read_http_error_body(response).await;
+            let (body, timed_out) = upstream::read_http_error_body(response).await;
+            meta.timed_out = timed_out;
             let info = serde_json::from_str::<Value>(&body)
                 .ok()
                 .map(|value| upstream::extract_error_members(body_error_object(&value)))
@@ -157,7 +166,7 @@ impl PreparedProbe {
                 req,
                 response,
                 timeout_ms,
-                &mut meta.upstream_rate_limited,
+                &mut meta.stream_failure_class,
             )
             .await;
         }
@@ -324,8 +333,9 @@ async fn decode_probe_stream(
     req: &urp::UrpRequest,
     response: reqwest::Response,
     timeout_ms: u64,
-    upstream_rate_limited: &mut bool,
+    failure_class: &mut Option<RetryableFailureClass>,
 ) -> Result<Option<urp::Usage>, ProbeFailure> {
+    let status = response.status().as_u16();
     let legacy = typed_request_to_legacy(req, None);
     let pending_extra = find_pending_request_envelope_extra(&req.input);
     let (tx, mut rx) = mpsc::channel(16);
@@ -372,7 +382,9 @@ async fn decode_probe_stream(
     let (decoded, (terminal, event_error)) = tokio::join!(decode, read);
     let diagnostic = {
         let mut metrics = metrics.lock().await;
-        *upstream_rate_limited = metrics.upstream_terminal_rate_limited;
+        if metrics.terminal.terminal_error.is_some() {
+            *failure_class = metrics.terminal.failure_class(status);
+        }
         metrics.terminal.terminal_error.take()
     };
     if let Some(error) = diagnostic {
@@ -433,7 +445,8 @@ fn terminal_outcome_failure(
 
 #[derive(Default)]
 struct ProbeResponse {
-    upstream_rate_limited: bool,
+    stream_failure_class: Option<RetryableFailureClass>,
+    timed_out: bool,
     status: Option<StatusCode>,
     retry_after_seconds: Option<u16>,
 }
@@ -445,7 +458,8 @@ impl ProbeResponse {
             usage: None,
             http_status: self.status.map(|status| status.as_u16()),
             retry_after_seconds: self.retry_after_seconds,
-            rate_limited: false,
+            failure_class: None,
+            timed_out: self.timed_out,
             error_code: None,
             error_type: None,
             error: None,
@@ -453,16 +467,13 @@ impl ProbeResponse {
         match result {
             Ok(usage) => outcome.usage = usage,
             Err(failure) => {
-                outcome.rate_limited = self.upstream_rate_limited
-                    || (outcome.http_status.is_some()
-                        && matches!(
-                            classify_channel_health_failure(
-                                outcome.http_status,
-                                failure.code.as_deref(),
-                                failure.error_type.as_deref()
-                            ),
-                            Some(RetryableFailureClass::RateLimited)
-                        ));
+                outcome.failure_class = self.stream_failure_class.or_else(|| {
+                    classify_channel_health_failure(
+                        Some(outcome.http_status?),
+                        failure.code.as_deref(),
+                        failure.error_type.as_deref(),
+                    )
+                });
                 outcome.error_code = failure.code;
                 outcome.error_type = failure.error_type;
                 outcome.error = Some(failure.message);

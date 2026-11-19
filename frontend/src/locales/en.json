@@ -823,6 +823,8 @@
 		"testChannelDesc": "Test Channel {{channel}} on {{provider}}",
 		"testing": "Testing...",
 		"testFailed": "Failed",
+		"testStreamErrorHttp": "Stream error · HTTP {{status}}",
+		"testResponseBodyErrorHttp": "Response body error · HTTP {{status}}",
 		"testIdle": "Not tested",
 		"streamTest": "Stream response",
 		"streamTestDesc": "Request streaming for models that support it. Request transforms can change the upstream mode.",

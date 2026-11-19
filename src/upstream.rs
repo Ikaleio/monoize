@@ -386,7 +386,7 @@ async fn non_success_upstream_error(
 ) -> UpstreamCallError {
     let forwarded_headers = forwarded_response_headers(resp.headers());
     let retry_after_seconds = parse_retry_after(resp.headers(), chrono::Utc::now().timestamp());
-    let text = read_http_error_body(resp).await;
+    let (text, _) = read_http_error_body(resp).await;
     let info = extract_error_info(&text);
     let (message, source) = match info.message.clone() {
         Some(message) => (message, UpstreamErrorSource::StructuredBody),
@@ -404,19 +404,27 @@ async fn non_success_upstream_error(
     err
 }
 
-pub(crate) async fn read_http_error_body(resp: reqwest::Response) -> String {
+pub(crate) async fn read_http_error_body(resp: reqwest::Response) -> (String, bool) {
     let mut chunks = resp.bytes_stream();
     use futures_util::StreamExt as _;
     let mut text = Vec::new();
     const ERROR_MAX: usize = 64 * 1024;
-    while let Some(Ok(chunk)) = chunks.next().await {
+    let mut timed_out = false;
+    while let Some(result) = chunks.next().await {
+        let chunk = match result {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                timed_out = error.is_timeout();
+                break;
+            }
+        };
         let take = chunk.len().min(ERROR_MAX - text.len());
         text.extend_from_slice(&chunk[..take]);
         if text.len() == ERROR_MAX {
             break;
         }
     }
-    String::from_utf8_lossy(&text).into_owned()
+    (String::from_utf8_lossy(&text).into_owned(), timed_out)
 }
 
 pub(crate) fn parse_retry_after(headers: &axum::http::HeaderMap, now: i64) -> Option<u16> {
@@ -534,10 +542,13 @@ fn extract_error_info(text: &str) -> UpstreamErrorInfo {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return UpstreamErrorInfo::default();
     };
-    let Some(error) = value.get("error") else {
-        return UpstreamErrorInfo::default();
-    };
-    extract_error_members(error)
+    if let Some(error) = value.get("error").filter(|error| error.is_object()) {
+        extract_error_members(error)
+    } else {
+        let mut info = extract_error_members(&value);
+        info.message = None;
+        info
+    }
 }
 
 pub(crate) fn extract_error_members(error: &Value) -> UpstreamErrorInfo {

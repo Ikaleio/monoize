@@ -1,5 +1,4 @@
 use super::exchange::Reply;
-use super::run::app_failure_class;
 use super::*;
 
 impl NonstreamRun<'_> {
@@ -25,7 +24,7 @@ impl NonstreamRun<'_> {
             Ok(decoded) => decoded,
             Err(mut err) => {
                 err.forwarded_headers = std::mem::take(&mut call.forwarded_headers);
-                let passive_failure_class = app_failure_class(&err);
+                let passive_failure_class = classify_retryable_app_failure(&err);
                 return Ok(TryOutcome::Failed {
                     error: err,
                     failure_class: passive_failure_class,
@@ -99,8 +98,7 @@ impl NonstreamRun<'_> {
             let dump = self.attempt_dump(attempt, &call, upstream_request, None, None, Some(error));
             session.push_attempt(dump).await;
         }
-        let passive_failure_class =
-            is_same_channel_retryable_error(&err).then(|| classify_retryable_failure(&err));
+        let passive_failure_class = classify_retryable_failure(&err);
         let mask_sensitive_info = self
             .inputs
             .state

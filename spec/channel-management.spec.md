@@ -468,10 +468,11 @@ CM-CH-TEST-1. The Channel liveness endpoint MUST behave as follows:
 - For the effective native image and decision API types listed in AHS-4b, use the native non-streaming probe with Channel bearer authentication and without transforms. Do not consult the effective stream setting. An explicit `stream = true` remains invalid and MUST return HTTP `400` with code `invalid_request`.
 - Replicate Channels MUST be rejected for active completion tests.
 - A `system_one` probe MUST send `POST {base}/v1/systemone` with `state = "ping"` and one `noul` question. An `openai_decisions` probe MUST send `POST {base}/v1/decisions` with `input = "ping"` and one `predicate` question.
-- If `per_model_circuit_break = true`, a successful test MUST reset only the `{channel_id}::{resolved logical model}` health key. It MUST NOT reset the base Channel key or any sibling model key. If this model key does not exist and capacity remains, insert and reset this model key.
-- If `per_model_circuit_break = false`, a successful test MUST reset only the base Channel health key. If this key does not exist and capacity remains, insert and reset it.
-- A successful test MUST apply the PHS-6 reset only if its captured routing configuration revision still matches. It MUST NOT inspect or mutate any other health-map key. Its health-map work MUST be `O(1)` and independent of Channel model count and global health entry count.
+- The tested health key is `(channel_id, resolved logical model)` when `per_model_circuit_break = true`, otherwise it is the base `channel_id` key. The endpoint MUST capture the routing configuration revision used to prepare the test. It MUST NOT apply any health write if that revision no longer matches at completion.
+- On success, reset the tested key under PHS-6. If the key does not exist and capacity remains, insert and reset it. On a Persistent upstream failure classified under RTA-5a and RTA-5b, trip the tested key under PHS-8. This requires an enabled Provider circuit breaker and an effectively healthy key. The trip MUST allocate a new `trip_id`, set `rl = false`, and calculate the recovery mode and time per PHS-4 and PHS-5. The test MUST NOT replace a current unhealthy trip.
+- Transient, RateLimited, unclassified, preparation (including transform or encoding), and timeout failures MUST NOT change health. HSK-6 and HSK-7 apply to either health write. The endpoint MUST NOT inspect or mutate any other health-map key. Its health-map work MUST be `O(1)` and independent of Channel model count and global health entry count.
 - Response: `{ "success": boolean, "latency_ms": integer, "model": string, "stream": boolean, "http_status": integer | null, "error_code": string | null, "error_type": string | null, "error": string | null }`
+- When an upstream HTTP status is present, `stream` reports the upstream mode after request transforms. `http_status` reports the actual upstream HTTP status, including `2xx` when decoding the response fails.
 - On probe failure, `error` MUST identify the failure rather than a generic sentence:
   - HTTP non-2xx: `upstream returned {status} {reason}: {body}` where `{status}` is the
     numeric status (e.g. `500`, `503`), `{reason}` is the canonical reason phrase when
@@ -523,6 +524,15 @@ CP-FE-9b. The dialog MUST offer "重测失败项", enabled when at least one mod
 CP-FE-9c. The Provider editor Channel detail MUST include a "测试" button that opens this dialog for the saved Channel. It is disabled while the editor has unsaved changes or the Channel has no id, with a tooltip explaining "请先保存更改".
 
 CP-FE-10. A failed model row MUST render the concrete `error` value inline. The row MUST NOT require hover to read the error. The UI MAY truncate the initial display only when it supplies an expand action and a copy action for the complete value. The failed status badge MUST read "失败 · N ms" when a latency is known and "失败" otherwise.
+
+CP-FE-10a. The test dialog's HTTP status chip and the Provider-card quick-test failure toast MUST use the same label rule. For `success = false` and `200 <= http_status <= 299`, use the result's `stream` value, not the current checkbox state, to label the failure location and include `HTTP {status}`. A bare `HTTP {status}` MUST NOT represent a failed 2xx result.
+
+| Result `stream` | `zh` | `en` |
+| --- | --- | --- |
+| `true` | `流内错误 · HTTP {status}` | `Stream error · HTTP {status}` |
+| `false` | `响应体错误 · HTTP {status}` | `Response body error · HTTP {status}` |
+
+Both labels MUST be localized in `en`, `zh`, `zh-TW`, and `ja`. A failed non-2xx result keeps `HTTP {status}`. A result with null `http_status` MUST NOT acquire an HTTP status label. Successful results and the test API response schema remain unchanged.
 
 CP-FE-11. A Provider overview model badge MUST use the following severity order: red for `availability_status = unavailable`; yellow for `availability_status = degraded` or `pricing_status != complete`; default styling otherwise. Color MUST NOT be the only state signal. The badge detail overlay MUST separate breaker details from pricing details.
 

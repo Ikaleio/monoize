@@ -35,8 +35,9 @@ Monoize 按巢狀順序嘗試路由：先在一個 Provider 內遍歷 Channel，
 
 | 錯誤 | 同 Channel 重試 | 前進到下一路由 |
 | --- | --- | --- |
-| HTTP `408`、`429`、`5xx` | 是 | 是，Channel 預算耗盡後 |
+| 非持續性故障的 HTTP `408`、`429`、`5xx` | 是 | 是，Channel 預算耗盡後 |
 | 逾時、連線被拒絕或重設 | 是 | 是，Channel 預算耗盡後 |
+| 持續性上游故障，包括上游額度用盡 | 否 | 是，立即前進 |
 | 其他上游錯誤（如 `400`、`401`、`404`） | 否 | 是，立即前進 |
 | 上游協定無法表示請求中的媒體內容 | 否 | 是，立即前進 |
 | Monoize 的其他錯誤（如認證、餘額、請求驗證、請求編碼或計費錯誤） | 否 | 否；路由終止 |
@@ -60,6 +61,8 @@ Monoize 在第一個上游嘗試被接受後傳送 SSE 回應標頭。HTTP 嘗�
 - **已停用。** `enabled` 為 `false`。無論是否啟用斷路器，Channel 都不會接收流量。
 
 啟用斷路器後，持續性故障會立即使 Channel 變為不健康。暫時性故障和流量限制錯誤在 30 秒內累計達 3 次時，預設會觸發斷路。啟用 `per_model_circuit_break` 後，Monoize 會分別追蹤 Channel 中各模型的健康狀態。某個模型不健康時，不影響同一 Channel 中其他模型接收流量。
+
+即使上游傳回 HTTP `429`，Monoize 也會將上游額度用盡視為持續性故障。這類錯誤的錯誤碼或類型包括 `insufficient_quota`、`credit_balance_exhausted`、`credit_balance_too_low`、`insufficient_balance` 和 `billing_hard_limit_reached`。遇到持續性故障時，Monoize 不會重試同一個 Channel。其他 HTTP `429` 錯誤仍屬於流量限制，包括 `quota_exceeded`。
 
 ### 主節點上的探測復原
 
@@ -90,13 +93,15 @@ Responses、Chat Completions、Messages 和 Gemini 的探測請求一開始只�
 
 `monoize_honor_rate_limit` 預設為 `false`。可透過 Provider 或 Channel 的 `honor_rate_limit_override` 覆寫全域設定。Monoize 依 Channel、Provider、全域的順序，採用第一個非 `null` 的值。明確設為 `false` 表示關閉，而不是繼承。
 
-啟用後，如果觸發斷路的是 HTTP `429` 或其他可識別的流量限制錯誤，首次探測或定時復原前會改用流量限制冷卻時間。這段時間預設為 15 秒。透過全域設定 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 調整。
+啟用後，如果觸發斷路的是流量限制錯誤，首次探測或定時復原前會改用流量限制冷卻時間。上游額度用盡不適用這項規則，即使傳回 HTTP `429`。這段時間預設為 15 秒。透過全域設定 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 調整。
 
 如果上游傳回有效且較長的 `Retry-After`，Monoize 會採用該值。比較前，Monoize 會將從回應標頭解析出的時間限制在 3600 秒以內。有效的 `retry-after-ms` 優先於 `Retry-After`，並無條件進位至整秒。探測本身若受流量限制，則根據該次探測的回應套用相同規則。關閉此設定時，流量限制錯誤仍使用一般探測間隔或定時復原等候時間。
 
 ### 儀表板測試和啟用開關
 
-執行 [Channel 測試](/zh-TW/docs/dashboard/providers-and-channels)，無須等候主動探測即可確認是否恢復。測試與主動探測採用相同的請求處理流程和成功判定規則。對補全類測試，**快速測試**採用 Channel 實際生效的串流設定；在測試對話框中可以自行選擇初始串流模式。測試成功後，Channel 會立即恢復健康。啟用 `per_model_circuit_break` 時，只有通過測試的模型會恢復健康。這項測試不支援 Replicate 補全請求。
+執行 [Channel 測試](/zh-TW/docs/dashboard/providers-and-channels)，無須等候主動探測即可確認是否恢復。測試與主動探測採用相同的請求處理流程和成功判定規則。對補全類測試，**快速測試**採用 Channel 實際生效的串流設定；在測試對話框中可以選擇初始串流模式。這項測試不支援 Replicate 補全請求。
+
+測試通過後，受測的 Channel 或模型會恢復健康。啟用斷路器時，如果測試遇到持續性上游故障，受測對象就會變為不健康。如果已經不健康，原本的復原排程不變。其他測試失敗不會改變健康狀態。啟用 `per_model_circuit_break` 時，測試只影響受測模型。
 
 啟用或停用 Channel 都會清除其健康記錄，包括各模型的健康狀態。
 

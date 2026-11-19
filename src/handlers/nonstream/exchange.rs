@@ -341,25 +341,34 @@ async fn collect_streamed_upstream_response(
             _ => {}
         }
     }
-    decode_handle
-        .await
-        .map_err(|e| {
-            CollectedUpstreamError::Internal(AppError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "task_panic",
-                e.to_string(),
-            ))
-        })?
-        .map_err(|mut error| {
-            if stream_error.is_none() {
-                error.retry_after_seconds = retry_after_seconds;
-            }
-            CollectedUpstreamError::Upstream(error)
-        })?;
+    let decoded = decode_handle.await.map_err(|e| {
+        CollectedUpstreamError::Internal(AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "task_panic",
+            e.to_string(),
+        ))
+    })?;
+    let metrics = runtime_metrics.lock().await;
+    if let Some(terminal) = metrics.terminal.terminal_error.as_ref() {
+        let (code, error_type) = metrics.terminal.upstream_error_fields();
+        let error = stream_error.or_else(|| decoded.err()).unwrap_or_else(|| {
+            AppError::new(StatusCode::BAD_GATEWAY, &terminal.code, &terminal.message)
+        });
+        return Err(CollectedUpstreamError::Upstream(error.with_upstream_error(
+            None,
+            code.map(str::to_owned),
+            error_type.map(str::to_owned),
+            terminal.param.clone(),
+        )));
+    }
     if let Some(err) = stream_error {
         return Err(CollectedUpstreamError::Upstream(err));
     }
-    let observed_response_model = runtime_metrics.lock().await.response_model.clone();
+    decoded.map_err(|mut error| {
+        error.retry_after_seconds = retry_after_seconds;
+        CollectedUpstreamError::Upstream(error)
+    })?;
+    let observed_response_model = metrics.response_model.clone();
     final_response
         .map(|response| (response, observed_response_model))
         .ok_or_else(|| {

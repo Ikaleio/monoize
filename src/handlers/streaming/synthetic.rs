@@ -195,8 +195,7 @@ impl StreamForward {
             Ok(resp) => resp,
             Err(mut err) => {
                 err.forwarded_headers = forwarded_headers;
-                let passive_failure_class = is_same_channel_retryable_app_error(&err)
-                    .then(|| classify_retryable_app_failure(&err));
+                let passive_failure_class = classify_retryable_app_failure(&err);
                 return Ok(SlotOutcome::Failed {
                     error: err,
                     failure_class: passive_failure_class,

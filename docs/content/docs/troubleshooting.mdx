@@ -41,6 +41,12 @@ No route serves the model, the final attempt failed without an upstream code, or
 
 The client receives the final upstream status and code, for example `429 rate_limit_exceeded`. This also applies with `stream: true`. Read the failed attempts on the log row to see each hop. An attempt that received `2xx` before failing can make a later error arrive in the stream with HTTP `200`.
 
+### `credit_balance_exhausted` or `insufficient_quota` on OpenAI Platform
+
+The OpenAI Platform account that owns the Channel's API key has no credits left. OpenAI can return HTTP `429` or report the error in a stream after HTTP `200` headers. Monoize treats both as persistent failures. With the circuit breaker on, the Channel or affected model becomes unhealthy immediately.
+
+Add credits in OpenAI Platform. Wait for the automatic probe to pass, or run a [Channel test](/en/docs/dashboard/providers-and-channels) for the affected model. A passing test restores health immediately. Channels on replica nodes can also recover when their timed recovery wait ends.
+
 ### `400 unsupported_tool`
 
 The request sends an `openrouter:*` tool or another tool type without a Chat encoding to a Chat dialect that cannot represent it. Remove the tool, or route the model to a Channel with the `openrouter` or `generic` dialect. See [API Endpoints](/en/docs/endpoints).

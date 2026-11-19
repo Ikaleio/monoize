@@ -1,5 +1,5 @@
 use super::*;
-use crate::monoize_routing::{ChannelHealthState, MonoizeChannel, RecoveryMode, recovery_wait};
+use crate::monoize_routing::{ChannelHealthState, MonoizeChannel, RecoveryMode};
 use crate::settings::BUILTIN_REASONING_EFFORT_SUFFIXES;
 use std::sync::atomic::Ordering;
 
@@ -47,7 +47,7 @@ pub(super) fn is_shared_origin_status(status: Option<u16>) -> bool {
     matches!(status, Some(502 | 503 | 524))
 }
 
-fn channel_recovery_mode(
+pub(crate) fn channel_recovery_mode(
     state: &AppState,
     provider_type: crate::monoize_routing::MonoizeProviderType,
 ) -> RecoveryMode {
@@ -643,10 +643,7 @@ pub(super) async fn collect_provider_attempts(
                 .passive_failure_count_threshold_override
                 .unwrap_or(runtime.passive_failure_count_threshold)
                 .max(1),
-            passive_cooldown_seconds: channel
-                .passive_cooldown_seconds_override
-                .unwrap_or(runtime.passive_cooldown_seconds)
-                .max(1),
+            passive_cooldown_seconds: runtime.passive_cooldown(channel),
             passive_window_seconds: channel
                 .passive_window_seconds_override
                 .unwrap_or(runtime.passive_window_seconds)
@@ -1438,21 +1435,6 @@ fn status_allows_same_channel_retry(status: StatusCode) -> bool {
         || status.is_server_error()
 }
 
-pub(super) fn is_same_channel_retryable_error(err: &UpstreamCallError) -> bool {
-    if matches!(err.kind, UpstreamErrorKind::Network) {
-        return true;
-    }
-    err.status.is_some_and(status_allows_same_channel_retry)
-}
-
-pub(super) fn is_same_channel_retryable_app_error(err: &AppError) -> bool {
-    // `status` is Monoize's wrapper status. Only an actual upstream status may
-    // authorize another request to the same Channel.
-    err.upstream_status
-        .and_then(|status| StatusCode::from_u16(status).ok())
-        .is_some_and(status_allows_same_channel_retry)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RetryableFailureClass {
     RateLimited,
@@ -1460,25 +1442,29 @@ pub(crate) enum RetryableFailureClass {
     Persistent,
 }
 
-pub(super) fn classify_retryable_failure(err: &UpstreamCallError) -> RetryableFailureClass {
-    if matches!(err.status, Some(StatusCode::TOO_MANY_REQUESTS)) {
-        return RetryableFailureClass::RateLimited;
-    }
-    RetryableFailureClass::Transient
+pub(super) fn classify_retryable_failure(err: &UpstreamCallError) -> Option<RetryableFailureClass> {
+    let network = matches!(err.kind, UpstreamErrorKind::Network);
+    (network || err.status.is_some_and(status_allows_same_channel_retry)).then(|| {
+        classify_channel_health_failure(
+            err.status.map(|status| status.as_u16()),
+            err.code.as_deref(),
+            err.error_type.as_deref(),
+        )
+        .unwrap_or(RetryableFailureClass::Transient)
+    })
 }
 
-pub(super) fn classify_retryable_app_failure(err: &AppError) -> RetryableFailureClass {
-    if err.upstream_status == Some(StatusCode::TOO_MANY_REQUESTS.as_u16()) {
-        return RetryableFailureClass::RateLimited;
-    }
-    RetryableFailureClass::Transient
-}
-
-fn normalized_failure_signal(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase)
+pub(super) fn classify_retryable_app_failure(err: &AppError) -> Option<RetryableFailureClass> {
+    // Only an upstream status, not the local wrapper status, can authorize another dispatch.
+    let status = StatusCode::from_u16(err.upstream_status?).ok()?;
+    status_allows_same_channel_retry(status).then(|| {
+        classify_channel_health_failure(
+            err.upstream_status,
+            err.upstream_code.as_deref(),
+            err.upstream_type.as_deref(),
+        )
+        .unwrap_or(RetryableFailureClass::Transient)
+    })
 }
 
 pub(crate) fn classify_channel_health_failure(
@@ -1486,16 +1472,24 @@ pub(crate) fn classify_channel_health_failure(
     error_code: Option<&str>,
     error_type: Option<&str>,
 ) -> Option<RetryableFailureClass> {
-    let signals = [
-        normalized_failure_signal(error_code),
-        normalized_failure_signal(error_type),
-    ];
+    let signals = [error_code.map(str::trim), error_type.map(str::trim)];
     let has_signal = |expected: &[&str]| {
-        signals
-            .iter()
-            .flatten()
-            .any(|signal| expected.contains(&signal.as_str()))
+        signals.iter().flatten().any(|signal| {
+            expected
+                .iter()
+                .any(|value| signal.eq_ignore_ascii_case(value))
+        })
     };
+
+    if has_signal(&[
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "credit_balance_too_low",
+        "insufficient_balance",
+        "billing_hard_limit_reached",
+    ]) {
+        return Some(RetryableFailureClass::Persistent);
+    }
 
     if http_status == Some(StatusCode::TOO_MANY_REQUESTS.as_u16()) {
         return Some(RetryableFailureClass::RateLimited);
@@ -1520,11 +1514,7 @@ pub(crate) fn classify_channel_health_failure(
         "account_deactivated",
         "account_suspended",
         "authentication_error",
-        "billing_hard_limit_reached",
-        "credit_balance_too_low",
         "deployment_not_found",
-        "insufficient_balance",
-        "insufficient_quota",
         "invalid_api_key",
         "model_not_found",
         "model_not_supported",
@@ -1560,12 +1550,13 @@ pub(super) async fn record_channel_failure(
     app_err: &AppError,
     passive_failure_class: Option<RetryableFailureClass>,
 ) -> bool {
-    let Some(failure_class) = classify_channel_health_failure(
-        app_err.upstream_status,
-        app_err.upstream_code.as_deref(),
-        app_err.upstream_type.as_deref(),
-    )
-    .or(passive_failure_class) else {
+    let Some(failure_class) = passive_failure_class.or_else(|| {
+        classify_channel_health_failure(
+            app_err.upstream_status,
+            app_err.upstream_code.as_deref(),
+            app_err.upstream_type.as_deref(),
+        )
+    }) else {
         return false;
     };
     let shared_origin_blast = failure_class == RetryableFailureClass::Transient
@@ -1597,16 +1588,6 @@ pub(super) async fn record_midstream_terminal_failure(
     if attempt.affinity_hit == Some(true) && unhealthy {
         clear_channel_affinity(state, attempt).await;
     }
-}
-
-/// STRM-4: classify an in-stream terminal error independently from whether a
-/// new attempt is possible after downstream bytes have already been emitted.
-pub(super) fn midstream_terminal_failure_class(
-    http_status: u16,
-    error_code: Option<&str>,
-    error_type: Option<&str>,
-) -> Option<RetryableFailureClass> {
-    classify_channel_health_failure(Some(http_status), error_code, error_type)
 }
 
 /// STRM-4: only upstream-side adapter failures (idle timeout, malformed
@@ -1739,23 +1720,16 @@ fn apply_retryable_failure_to_channel(
         return false;
     }
     let mode = peer.map_or(attempt.recovery_mode, |peer| peer.recovery_mode);
-    let ordinary_wait = match mode {
-        RecoveryMode::Probe => peer.map_or(attempt.probe_interval, |peer| peer.probe_interval),
-        RecoveryMode::Timed => attempt.passive_cooldown_seconds,
-    };
-    let rate_limited = sample.failure_class == RetryableFailureClass::RateLimited;
-    let wait = recovery_wait(
-        ordinary_wait,
-        attempt.rate_limit_wait,
-        rate_limited,
-        sample.retry_after_seconds,
-    );
-    entry.trip(
+    let wait = entry.trip(
         sample.now,
         mode,
-        rate_limited,
+        mode.ordinary_wait(
+            peer.map_or(attempt.probe_interval, |peer| peer.probe_interval),
+            attempt.passive_cooldown_seconds,
+        ),
+        attempt.rate_limit_wait,
+        sample.failure_class == RetryableFailureClass::RateLimited,
         sample.retry_after_seconds,
-        wait,
     );
     if peer.is_none() {
         tracing::info!(

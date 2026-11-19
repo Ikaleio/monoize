@@ -816,6 +816,8 @@
 		"testChannelDesc": "测试 {{provider}} 的 Channel {{channel}}",
 		"testing": "测试中...",
 		"testFailed": "失败",
+		"testStreamErrorHttp": "流内错误 · HTTP {{status}}",
+		"testResponseBodyErrorHttp": "响应体错误 · HTTP {{status}}",
 		"testIdle": "未测试",
 		"streamTest": "流式响应",
 		"streamTestDesc": "为支持流式测试的模型请求流式响应。请求变换可以改变发送给上游的模式。",

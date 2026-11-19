@@ -107,7 +107,7 @@ impl<'a> NonstreamRun<'a> {
             Exchange::AttemptFailed(err) => {
                 self.capture_failure(attempt, &mut call, &err).await;
                 Ok(TryOutcome::Failed {
-                    failure_class: app_failure_class(&err),
+                    failure_class: classify_retryable_app_failure(&err),
                     error: err,
                 })
             }
@@ -161,9 +161,4 @@ impl<'a> NonstreamRun<'a> {
         self.inputs.capture.persist(None, true).await;
         final_err
     }
-}
-
-/// Same-Channel retry class of a failure reported as an `AppError`.
-pub(super) fn app_failure_class(err: &AppError) -> Option<RetryableFailureClass> {
-    is_same_channel_retryable_app_error(err).then(|| classify_retryable_app_failure(err))
 }

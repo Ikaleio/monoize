@@ -1065,6 +1065,29 @@ pub(crate) struct StreamTerminalDiagnostics {
     pub(crate) terminal_finish_reason: Option<String>,
     pub(crate) synthetic_terminal_emitted: bool,
     pub(crate) terminal_error: Option<StreamTerminalError>,
+    #[serde(skip)]
+    upstream_error_code: Option<String>,
+    #[serde(skip)]
+    upstream_error_type: Option<String>,
+}
+
+impl StreamTerminalDiagnostics {
+    fn upstream_error_fields(&self) -> (Option<&str>, Option<&str>) {
+        let diagnostic = self.terminal_error.as_ref();
+        (
+            self.upstream_error_code
+                .as_deref()
+                .or_else(|| diagnostic.map(|error| error.code.as_str())),
+            self.upstream_error_type
+                .as_deref()
+                .or_else(|| diagnostic.and_then(|error| error.error_type.as_deref())),
+        )
+    }
+
+    fn failure_class(&self, status: u16) -> Option<RetryableFailureClass> {
+        let (code, error_type) = self.upstream_error_fields();
+        classify_channel_health_failure(Some(status), code, error_type)
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -1085,7 +1108,6 @@ pub(crate) struct StreamRuntimeMetrics {
     response_model: Option<String>,
     response_model_terminal: bool,
     terminal: StreamTerminalDiagnostics,
-    upstream_terminal_rate_limited: bool,
     pub(crate) estimated_output_tokens: u64,
     // Feeds the usage-less billing estimate only; TPS is derived at display
     // time from `output_tokens`, `duration_ms`, and `ttfb_ms` (request-logs

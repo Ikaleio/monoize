@@ -490,8 +490,7 @@ impl StreamForward {
 
     /// Records an upstream call that failed before any response body.
     pub(super) async fn record_call_failure(&self, err: UpstreamCallError) -> SlotOutcome {
-        let passive_failure_class =
-            is_same_channel_retryable_error(&err).then(|| classify_retryable_failure(&err));
+        let passive_failure_class = classify_retryable_failure(&err);
         let mask_sensitive_info = self.request.mask_sensitive_info().await;
         let app_err = upstream_error_to_app(err, mask_sensitive_info);
         SlotOutcome::Failed {

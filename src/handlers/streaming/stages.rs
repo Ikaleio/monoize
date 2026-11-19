@@ -71,22 +71,23 @@ pub(super) async fn probe_stream_first_output(
                     .filter(|status| (400..=599).contains(status))
                     .and_then(|status| StatusCode::from_u16(status as u16).ok());
                 let _ = decode_handle.await;
-                let terminal = runtime_metrics.lock().await.terminal.terminal_error.clone();
+                let guard = runtime_metrics.lock().await;
+                let terminal = guard.terminal.terminal_error.as_ref();
                 let http_status = terminal
-                    .as_ref()
                     .map(|terminal| terminal.http_status)
                     .unwrap_or(StatusCode::BAD_GATEWAY.as_u16());
-                let error_type = terminal
-                    .as_ref()
-                    .and_then(|terminal| terminal.error_type.clone());
-                let param = terminal.and_then(|terminal| terminal.param);
-                let reported_code = code.clone();
-                let code = code.unwrap_or_else(|| "upstream_stream_error".to_string());
-                let failure_class = midstream_terminal_failure_class(
-                    http_status,
-                    Some(&code),
-                    error_type.as_deref(),
+                let (reported_code, error_type) = guard.terminal.upstream_error_fields();
+                let reported_code = reported_code.or(code.as_deref());
+                let failure_class = classify_channel_health_failure(
+                    Some(explicit_status.map_or(http_status, |status| status.as_u16())),
+                    reported_code,
+                    error_type,
                 );
+                let error_type = error_type.map(str::to_owned);
+                let reported_code = reported_code.map(str::to_owned);
+                let param = terminal.and_then(|terminal| terminal.param.clone());
+                drop(guard);
+                let code = code.unwrap_or_else(|| "upstream_stream_error".to_string());
                 // `upstream_status` stays unset: the status is synthesized by the
                 // decoder and must not trigger an RTA-6c shared-origin blast.
                 let status = pre_output_error_status(
@@ -129,8 +130,14 @@ pub(super) async fn probe_stream_first_output(
                         err.to_string(),
                     ),
                 };
-                let failure_class =
-                    is_upstream_adapter_failure(&error).then_some(RetryableFailureClass::Transient);
+                let failure_class = classify_channel_health_failure(
+                    error.upstream_status,
+                    error.upstream_code.as_deref(),
+                    error.upstream_type.as_deref(),
+                )
+                .or_else(|| {
+                    is_upstream_adapter_failure(&error).then_some(RetryableFailureClass::Transient)
+                });
                 if failure_class.is_some() {
                     error.retry_after_seconds = retry_after_seconds;
                 }

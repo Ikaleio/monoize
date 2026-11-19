@@ -131,6 +131,10 @@ For completion tests, **Quick Test** uses the Channel's effective stream setting
 
 The test uses the same request pipeline and success rules as the [automatic probe](/en/docs/routing). Request transforms can change the stream mode or the initial 16-token output limit for completion tests. For a streaming test, HTTP `2xx` alone is not enough. The decoder must reach a terminal event without an error event. For a non-streaming completion test, the decoder must accept the response body.
 
+A passing test makes the tested Channel or model healthy. With the circuit breaker on, a persistent upstream failure makes it unhealthy without extending an existing recovery wait. Other failures do not change health. With `per_model_circuit_break` on, the result affects only the tested model.
+
+If a test fails after the upstream sends HTTP `2xx` headers, the result shows the failure location and the actual status. For HTTP `200`, it shows **Stream error · HTTP 200** or **Response body error · HTTP 200**. For example, OpenAI Platform can report depleted credits inside a stream after sending HTTP `200`.
+
 ## Map models
 
 To change several models, select **Select** in **Supported models**. Then filter the list, select models, and delete them or set one multiplier. The model picker can select or clear all current results. **Add manually** accepts several model IDs.

@@ -93,8 +93,7 @@ pub(super) async fn execute_stream_collected_image_typed(
                 }
             }
             Err(error) => {
-                let class = is_same_channel_retryable_error(&error)
-                    .then(|| classify_retryable_failure(&error));
+                let class = classify_retryable_failure(&error);
                 let mask = execution
                     .context
                     .state
@@ -219,8 +218,7 @@ impl ImageStreamExecution<'_> {
                         )
                         .await);
                 }
-                let class = is_same_channel_retryable_app_error(&failure.error)
-                    .then(|| classify_retryable_app_failure(&failure.error));
+                let class = classify_retryable_app_failure(&failure.error);
                 self.retry_failure(
                     driver,
                     slot,

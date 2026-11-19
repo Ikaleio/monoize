@@ -35,8 +35,9 @@ Monoize 按嵌套顺序尝试路由：先在一个 Provider 内遍历 Channel，
 
 | 错误 | 同 Channel 重试 | 前进到下一路由 |
 | --- | --- | --- |
-| HTTP `408`、`429`、`5xx` | 是 | 是，Channel 预算耗尽后 |
+| 非持久性故障的 HTTP `408`、`429`、`5xx` | 是 | 是，Channel 预算耗尽后 |
 | 超时、连接被拒绝或重置 | 是 | 是，Channel 预算耗尽后 |
+| 持久性上游故障，包括上游额度耗尽 | 否 | 是，立即前进 |
 | 其他上游错误（如 `400`、`401`、`404`） | 否 | 是，立即前进 |
 | 上游协议无法表示请求中的媒体内容 | 否 | 是，立即前进 |
 | Monoize 的其他错误（如认证、余额、请求校验、请求编码或计费错误） | 否 | 否；路由终止 |
@@ -60,6 +61,8 @@ Monoize 在第一个上游尝试被接受后发送 SSE 响应头。HTTP 尝试�
 - **已禁用。** `enabled` 为 `false`。无论是否开启熔断器，Channel 都不会接收流量。
 
 启用熔断器后，持久性故障会立即使 Channel 变为不健康。对于暂时性故障和限流错误，默认在 30 秒内累计 3 次失败就会触发熔断。启用 `per_model_circuit_break` 后，Monoize 会分别跟踪 Channel 中各模型的健康状态。某个模型不健康时，不影响同一 Channel 中其他模型接收流量。
+
+即使上游返回 HTTP `429`，Monoize 也会将上游额度耗尽视为持久性故障。此类错误的错误码或类型包括 `insufficient_quota`、`credit_balance_exhausted`、`credit_balance_too_low`、`insufficient_balance` 和 `billing_hard_limit_reached`。遇到持久性故障时，Monoize 不会重试同一 Channel。其他 HTTP `429` 错误仍属于限流，包括 `quota_exceeded`。
 
 ### 主节点上的探测恢复
 
@@ -90,13 +93,15 @@ Responses、Chat Completions、Messages 和 Gemini 的探测请求起初只包�
 
 `monoize_honor_rate_limit` 默认为 `false`。通过 Provider 或 Channel 的 `honor_rate_limit_override` 覆盖全局设置。Monoize 按 Channel、Provider、全局的顺序，使用第一个非 `null` 值。显式设为 `false` 表示关闭，而不是继承。
 
-开启后，如果触发熔断的是 HTTP `429` 或其他可识别的限流错误，首次探测或定时恢复前会改用限流冷却时间。该时间默认为 15 秒。通过全局设置 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 调整。
+开启后，如果触发熔断的是限流错误，首次探测或定时恢复前会改用限流冷却时间。上游额度耗尽不适用此规则，即使返回 HTTP `429`。该时间默认为 15 秒。通过全局设置 `monoize_passive_rate_limit_cooldown_seconds` 或 Channel 的 `passive_rate_limit_cooldown_seconds_override` 调整。
 
 如果上游返回了有效且更长的 `Retry-After`，Monoize 会采用该值。比较前，Monoize 会将从响应头解析出的时长限制在 3600 秒以内。有效的 `retry-after-ms` 优先于 `Retry-After`，并向上取整到秒。如果探测本身受到限流，则根据该次探测的响应应用同一规则。关闭此设置时，限流错误仍使用常规探测间隔或定时恢复等待时间。
 
 ### 仪表盘测试和启用开关
 
-运行 [Channel 测试](/zh/docs/dashboard/providers-and-channels)，无需等待主动探测即可确认是否恢复。测试与主动探测使用相同的请求处理流程和成功判定规则。对补全类测试，**快速测试**使用 Channel 的生效流式设置；在测试对话框中可以自行选择初始流式模式。测试成功后，Channel 立即恢复健康。启用 `per_model_circuit_break` 时，只有通过测试的模型会恢复健康。该测试不支持 Replicate 补全请求。
+运行 [Channel 测试](/zh/docs/dashboard/providers-and-channels)，无需等待主动探测即可确认是否恢复。测试与主动探测使用相同的请求处理流程和成功判定规则。对补全类测试，**快速测试**使用 Channel 的生效流式设置；在测试对话框中可以选择初始流式模式。该测试不支持 Replicate 补全请求。
+
+测试通过后，被测 Channel 或模型恢复健康。启用熔断器时，如果测试遇到持久性上游故障，被测对象会变为不健康。如果已经不健康，原来的恢复安排不变。其他测试失败不会改变健康状态。启用 `per_model_circuit_break` 时，测试只影响被测模型。
 
 启用或禁用 Channel 都会清除其健康记录，包括各模型的健康状态。
 

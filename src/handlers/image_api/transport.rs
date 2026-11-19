@@ -99,7 +99,13 @@ fn disable_image_streaming(request: &mut urp::UrpRequest) {
 }
 
 fn upstream_rejects_image_streaming(error: &upstream::UpstreamCallError) -> bool {
-    if !matches!(error.status.map(|status| status.as_u16()), Some(400 | 422)) {
+    if !matches!(error.status.map(|status| status.as_u16()), Some(400 | 422))
+        || classify_channel_health_failure(
+            error.status.map(|status| status.as_u16()),
+            error.code.as_deref(),
+            error.error_type.as_deref(),
+        ) == Some(RetryableFailureClass::Persistent)
+    {
         return false;
     }
     if matches!(

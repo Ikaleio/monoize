@@ -115,8 +115,7 @@ pub async fn compact_response(
                     .await;
             }
             Err(error) => {
-                let failure_class = is_same_channel_retryable_error(&error)
-                    .then(|| classify_retryable_failure(&error));
+                let failure_class = classify_retryable_failure(&error);
                 let mask = state.monoize_runtime.read().await.mask_sensitive_info;
                 let error = upstream_error_to_app(error, mask);
                 driver.fail(&state, slot, &error, failure_class).await;

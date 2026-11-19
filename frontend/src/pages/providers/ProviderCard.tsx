@@ -42,7 +42,7 @@ import type {
 	MonoizeChannel,
 	Provider
 } from '@/lib/api'
-import { useChannelTests } from './channel-test-context'
+import { channelTestFailureHttpLabel, useChannelTests } from './channel-test-context'
 import {
 	ChannelRuntimeStatus,
 	ProviderModelRuntimeBadge
@@ -218,7 +218,9 @@ export function ProviderCard({
 			if (result.success) {
 				toast.success(t('providers.quickTestPassed', { channel: channel.name, ms: result.latency_ms }), { description: result.model ?? model })
 			} else {
-				toast.error(t('providers.quickTestFailed', { channel: channel.name }), { description: result.error ?? result.model ?? model })
+				const title = t('providers.quickTestFailed', { channel: channel.name })
+				const httpLabel = channelTestFailureHttpLabel(t, result.http_status, result.stream)
+				toast.error(httpLabel ? `${title} · ${httpLabel}` : title, { description: result.error ?? result.model ?? model })
 			}
 		} catch (error) {
 			toastApiError(error, t, t('providers.quickTestFailed', { channel: channel.name }))

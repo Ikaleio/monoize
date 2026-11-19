@@ -41,6 +41,12 @@ description: 解决认证、路由、计费和流式传输的常见错误。
 
 客户端收到最后一次上游的状态码和错误码，例如 `429 rate_limit_exceeded`。`stream: true` 时同样如此。查看日志行中的失败尝试可了解每一跳。如果某次尝试收到 `2xx` 后才失败，之后的错误会以 HTTP `200` 在流中返回。
 
+### OpenAI Platform 返回 `credit_balance_exhausted` 或 `insufficient_quota`
+
+Channel 的 API 密钥所属的 OpenAI Platform 账户已用完额度。OpenAI 可能返回 HTTP `429`，也可能先发送 HTTP `200` 响应头，再在流中报告错误。Monoize 将这两种情况都视为持久性故障。启用熔断器时，Channel 或受影响的模型会立即变为不健康。
+
+在 OpenAI Platform 充值。等待主动探测通过，或对受影响的模型运行 [Channel 测试](/zh/docs/dashboard/providers-and-channels)。测试通过后，健康状态会立即恢复。副本节点上的 Channel 也可以在定时恢复的等待时间结束后恢复健康。
+
 ### `400 unsupported_tool`
 
 请求把 `openrouter:*` 工具或其他没有 Chat 编码的工具类型发送给无法表示它的 Chat 方言。请移除该工具，或把模型路由到 `openrouter` 或 `generic` 方言的 Channel。参见 [API 端点](/zh/docs/endpoints)。

@@ -108,11 +108,7 @@ impl LiveFinish {
             reconstructed,
             metrics,
         } = self;
-        if let Some(failure_class) = midstream_terminal_failure_class(
-            terminal_error.http_status,
-            Some(&terminal_error.code),
-            terminal_error.error_type.as_deref(),
-        ) {
+        if let Some(failure_class) = metrics.terminal.failure_class(terminal_error.http_status) {
             record_midstream_terminal_failure(&request.state, &attempt, failure_class).await;
         }
         spawn_request_log_stream_terminal_error(

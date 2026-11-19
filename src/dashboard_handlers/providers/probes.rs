@@ -1,4 +1,4 @@
-use super::runtime::reset_channel_health_after_successful_test;
+use super::runtime::record_channel_test_health;
 use crate::app::AppState;
 use crate::dashboard_handlers::session_helpers::require_admin;
 use crate::error::{AppError, AppResult};
@@ -522,19 +522,15 @@ pub async fn test_channel(
     tracing::debug!(channel_id = %channel.id, provider = %provider.name, probe_model = %probe.logical_model, success = outcome.ok, "channel test probe result");
     let latency_ms = started_at.elapsed().as_millis() as u64;
 
-    if outcome.ok {
-        let mut health = state.channel_health.lock().await;
-        if state.routing_config_revision.load(Ordering::Acquire) == routing_config_revision {
-            reset_channel_health_after_successful_test(
-                &mut health,
-                &channel_id,
-                provider.per_model_circuit_break,
-                probe.logical_model,
-                chrono::Utc::now().timestamp(),
-                crate::monoize_routing::channel_health_max_entries(),
-            );
-        }
-    }
+    record_channel_test_health(
+        &state,
+        &provider,
+        channel,
+        probe.logical_model,
+        routing_config_revision,
+        &outcome,
+    )
+    .await;
 
     Ok(Json(json!({
         "success": outcome.ok,
