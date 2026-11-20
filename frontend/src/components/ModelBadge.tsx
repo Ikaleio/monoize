@@ -42,7 +42,7 @@ export function ModelBadge({
 		<Badge
 			variant='secondary'
 			className={cn(
-				'h-7 max-w-full shrink-0 flex-nowrap gap-[0.45em] overflow-hidden border py-0 pl-1.5 pr-2 font-mono text-xs leading-[1.3] whitespace-nowrap transition-all',
+				'h-7 max-w-full shrink-0 flex-nowrap gap-1.5 overflow-hidden border px-2 py-1 font-mono text-xs whitespace-nowrap transition-all',
 				resolvedStatus === 'destructive' ?
 					'border-error-border bg-error-soft text-error-foreground hover:bg-error-soft/80'
 				: resolvedStatus === 'warning' ?
@@ -54,17 +54,17 @@ export function ModelBadge({
 			<ModelIcon
 				model={model}
 				provider={provider}
-				className='size-[1.15em] shrink-0'
+				className='h-3.5 w-3.5 shrink-0'
 			/>
 			{resolvedStatus === 'destructive' && (
-				<CircleX className='size-[1.15em] shrink-0' aria-hidden='true' />
+				<CircleX className='size-3.5 shrink-0' aria-hidden='true' />
 			)}
 			{resolvedStatus === 'warning' && (
-				<AlertTriangle className='size-[1.15em] shrink-0' aria-hidden='true' />
+				<AlertTriangle className='size-3.5 shrink-0' aria-hidden='true' />
 			)}
 			<span
 				className={cn(
-					'min-w-0 -translate-y-[0.04em]',
+					'min-w-0',
 					truncateModelText ? 'max-w-[220px] truncate' : 'whitespace-nowrap'
 				)}
 				title={model}
@@ -74,7 +74,7 @@ export function ModelBadge({
 			{shouldRenderDetails && (
 				<span
 					className={cn(
-						'min-w-0 -translate-y-[0.04em] text-[11px] opacity-60',
+						'min-w-0 text-[11px] opacity-60',
 						truncateModelText ? 'max-w-[160px] truncate' : 'whitespace-nowrap'
 					)}
 					title={`[${[

@@ -1,4 +1,4 @@
-import { createElement, type CSSProperties } from 'react'
+import { createElement } from 'react'
 import Ai302 from '@lobehub/icons/es/Ai302/components/Mono'
 import AiHubMix from '@lobehub/icons/es/AiHubMix/components/Mono'
 import AionLabs from '@lobehub/icons/es/AionLabs/components/Mono'
@@ -77,27 +77,7 @@ import ZeroOne from '@lobehub/icons/es/ZeroOne/components/Mono'
 import Zhipu from '@lobehub/icons/es/Zhipu/components/Mono'
 import { Box } from 'lucide-react'
 
-type IconComponent = React.ComponentType<{
-	className?: string
-	style?: CSSProperties
-}>
-
-// Per-icon optical centering for @lobehub/icons SVGs whose path bounding boxes
-// sit >3% off the 24x24 viewBox center.
-const OPTICAL_STYLES: ReadonlyMap<IconComponent, CSSProperties> = new Map([
-	[Kimi, { transform: 'translate(-5.8%, 8.3%)' }],
-	[Arcee, { transform: 'translate(0.6%, 7.3%)' }],
-	[Vercel, { transform: 'translate(0%, 4.5%)' }],
-	[Aws, { transform: 'translate(0%, -4.9%)' }],
-	[AntGroup, { transform: 'translate(2.1%, 4.2%)' }],
-	[Volcengine, { transform: 'translate(0.4%, 4.2%)' }],
-	[Fireworks, { transform: 'translate(0%, 4.2%)' }],
-	[Baichuan, { transform: 'translate(4.2%, 0%)' }],
-	[Nvidia, { transform: 'translate(-4.2%, 0%)' }],
-	[Poe, { transform: 'translate(0%, -3.8%)' }],
-	[Yi, { transform: 'translate(3.7%, 0%)' }],
-	[Vllm, { transform: 'translate(3.4%, 2.1%)' }]
-])
+type IconComponent = React.ComponentType<{ className?: string }>
 
 const PROVIDER_ICONS: Record<string, IconComponent> = {
 	openai: OpenAI,
@@ -278,9 +258,5 @@ export interface ModelIconProps {
  * react-hooks/static-components.
  */
 export function ModelIcon({ model, provider, className }: ModelIconProps) {
-	const icon = resolveModelIcon(model, provider)
-	return createElement(icon, {
-		className,
-		style: OPTICAL_STYLES.get(icon)
-	})
+	return createElement(resolveModelIcon(model, provider), { className })
 }
