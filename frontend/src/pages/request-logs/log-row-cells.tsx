@@ -687,7 +687,7 @@ export function LogRowCells({
                     multiplier={log.provider?.multiplier}
                     showDetails={false}
                     truncateModelText={false}
-                    className="h-5 min-w-max px-1.5 text-[10px]"
+                    className="h-5 min-w-max pl-1 pr-1.5 text-[10px]"
                   />
                   {showUpstreamResponseModel ? (
                     <span className="font-mono text-[10px] text-warning-foreground">
