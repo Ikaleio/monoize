@@ -74,7 +74,7 @@ future cycles.
 
 ## Model listing
 
-`GET /v1/models` returns the logical models available to the calling API key. The result reflects key model restrictions and group membership.
+`GET /v1/models` returns the enabled logical models allowed by the API key's model restrictions. `GET /v1beta/models` returns the same model set in Gemini format. Gemini descriptors include token limits when model metadata defines them.
 
 ## Model globs
 

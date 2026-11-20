@@ -158,6 +158,7 @@ async fn unmarked_transport_failure_emits_one_target_error_sequence() {
         let expected_code = match downstream {
             DownstreamProtocol::Responses => "server_error",
             DownstreamProtocol::AnthropicMessages => "api_error",
+            DownstreamProtocol::Gemini => "INTERNAL",
             DownstreamProtocol::ChatCompletions => "upstream_transport_failed",
         };
         assert!(wire.contains(expected_code) && wire.contains("connection interrupted"));

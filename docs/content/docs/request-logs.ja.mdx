@@ -47,7 +47,7 @@ Monoize はフィルターをページの URL に保存します。URL をコピ
    - `capture-all`: 上流に到達したすべてのリクエストをキャプチャする。
    - `capture-only-abnormal`: 失敗または異常なリクエストのみキャプチャする。
 
-キャプチャは次のエンドポイントに適用されます: `POST /v1/responses`、`POST /v1/chat/completions`、`POST /v1/messages`、`POST /v1/images/generations`、`POST /v1/images/edits`。
+キャプチャの対象は Responses、Chat Completions、Messages、Gemini 推論、画像生成、画像編集です。トークン数の計測は対象外です。
 
 ### Image API とマルチモーダルペイロード
 

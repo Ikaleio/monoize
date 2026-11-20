@@ -1,7 +1,93 @@
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+
+const CREDENTIAL_ERROR_SIGNALS: [&str; 4] = [
+    "authentication_error",
+    "invalid_api_key",
+    "permission_error",
+    "permission_denied",
+];
+
+/// SE2a: the class signals of one upstream error, read from a URP error code and its extras.
+/// Every SE2a status and credential derivation reads them.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct StreamErrorDetails<'a> {
+    pub(crate) code: Option<&'a str>,
+    pub(crate) error_type: Option<&'a str>,
+    pub(crate) explicit_status: Option<StatusCode>,
+    pub(crate) param: Option<&'a str>,
+}
+
+impl<'a> StreamErrorDetails<'a> {
+    pub(crate) fn from_urp(code: Option<&'a str>, extra: &'a HashMap<String, Value>) -> Self {
+        let nested = extra.get("error").and_then(Value::as_object);
+        let member = |key: &str| {
+            extra
+                .get(key)
+                .or_else(|| nested.and_then(|error| error.get(key)))
+        };
+        // A top-level `type: "error"` names the frame, not the error class.
+        let error_type = extra
+            .get("error_type")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                extra
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .filter(|value| *value != "error")
+            })
+            .or_else(|| {
+                nested
+                    .and_then(|error| error.get("type"))
+                    .and_then(Value::as_str)
+            })
+            .filter(|value| !value.is_empty());
+        Self {
+            code: code.filter(|value| !value.is_empty()),
+            error_type,
+            explicit_status: member("status")
+                .and_then(Value::as_u64)
+                .filter(|status| (400..=599).contains(status))
+                .and_then(|status| StatusCode::from_u16(status as u16).ok()),
+            param: member("param").and_then(Value::as_str),
+        }
+    }
+
+    fn signal(self, expected: &[&str]) -> bool {
+        self.code.is_some_and(|code| expected.contains(&code))
+            || self
+                .error_type
+                .is_some_and(|value| expected.contains(&value))
+    }
+
+    pub(crate) fn is_credential_failure(self) -> bool {
+        self.explicit_status
+            .is_some_and(|status| matches!(status.as_u16(), 401 | 403 | 407))
+            || self.signal(&CREDENTIAL_ERROR_SIGNALS)
+    }
+
+    /// The status that a well-known rate-limit or server-error code or type implies.
+    pub(crate) fn implied_status(self) -> Option<StatusCode> {
+        if self.signal(&["rate_limit_exceeded", "rate_limit_error"]) {
+            Some(StatusCode::TOO_MANY_REQUESTS)
+        } else if self.signal(&["server_error", "api_error", "overloaded_error"]) {
+            Some(StatusCode::INTERNAL_SERVER_ERROR)
+        } else {
+            None
+        }
+    }
+
+    /// SE2a: the explicit status, else the implied status, else 502.
+    pub(crate) fn status(self) -> StatusCode {
+        self.explicit_status
+            .or_else(|| self.implied_status())
+            .unwrap_or(StatusCode::BAD_GATEWAY)
+    }
+}
 
 /// SE1d `FWD`: upstream retry and rate-limit response headers.
 pub type ForwardedHeaders = Vec<(HeaderName, HeaderValue)>;

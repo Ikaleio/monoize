@@ -47,7 +47,7 @@ Capture stores the exact payload of each upstream attempt on disk. Capture is of
    - `capture-all`: capture every request that reaches an upstream.
    - `capture-only-abnormal`: capture only failed or anomalous requests.
 
-Capture applies to these endpoints: `POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/images/generations`, and `POST /v1/images/edits`.
+Capture applies to Responses, Chat Completions, Messages, Gemini inference, image generation, and image edits. It does not apply to token counting.
 
 ### Image API and multimodal payloads
 

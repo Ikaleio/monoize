@@ -8,13 +8,12 @@ mod terminal;
 mod wire;
 
 use super::{StreamEncodeOptions, StreamEncoder};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, StreamErrorDetails};
 use crate::payload::sse::WireEvent as Event;
-use crate::urp::encode::gemini::encode_response_checked;
-use crate::urp::media::error_body;
-use crate::urp::stream_helpers::send_plain_sse_json;
+use crate::urp::encode::gemini::{encode_response_checked, error_json, error_status};
+use crate::urp::stream_helpers::{send_plain_sse_json, split_json_value_by_string_patch};
 use crate::urp::tool_signature::SignatureProjection;
-use crate::urp::{UrpResponse, UrpStreamEvent, is_internal_key};
+use crate::urp::{UrpResponse, UrpStreamEvent};
 use axum::http::StatusCode;
 use nodes::NodeSlot;
 use serde_json::{Map, Value, json};
@@ -87,7 +86,11 @@ impl GeminiStreamEncoder {
                 extra_body,
             } => {
                 self.terminal = true;
-                Ok(vec![error_frame(code, message, extra_body)])
+                let status = error_status(
+                    StreamErrorDetails::from_urp(code.as_deref(), &extra_body),
+                    false,
+                );
+                Ok(vec![error_json(status, &message)])
             }
             UrpStreamEvent::ProviderControl { .. } => Ok(Vec::new()),
         }
@@ -108,9 +111,20 @@ impl GeminiStreamEncoder {
         Value::Object(frame)
     }
 
-    async fn send(&self, frames: &[Value]) -> AppResult<()> {
-        for frame in frames {
-            send_plain_sse_json(&self.tx, frame).await?;
+    /// SSF-7: under a frame limit, the text of a plain text fragment splits across frames.
+    async fn send(&self, frames: Vec<Value>) -> AppResult<()> {
+        let limit = self.options.sse_max_frame_length;
+        for mut frame in frames {
+            match limit.and_then(|_| take_plain_fragment_text(&mut frame)) {
+                Some(text) => {
+                    for chunk in
+                        split_json_value_by_string_patch(frame, &text, patch_fragment_text, limit)
+                    {
+                        send_plain_sse_json(&self.tx, &chunk).await?;
+                    }
+                }
+                None => send_plain_sse_json(&self.tx, &frame).await?,
+            }
         }
         Ok(())
     }
@@ -118,7 +132,7 @@ impl GeminiStreamEncoder {
     /// Ends the stream with one native error frame.
     async fn fail(&mut self, message: String) -> AppResult<()> {
         self.terminal = true;
-        send_plain_sse_json(&self.tx, &error_body(&message)).await?;
+        send_plain_sse_json(&self.tx, &error_json(StatusCode::BAD_GATEWAY, &message)).await?;
         Err(
             AppError::new(StatusCode::BAD_GATEWAY, "stream_encode_failed", message)
                 .with_downstream_stream_terminal_sent(!self.tx.is_closed()),
@@ -150,7 +164,7 @@ impl StreamEncoder for GeminiStreamEncoder {
             return Ok(());
         }
         match self.apply(event) {
-            Ok(frames) => self.send(&frames).await,
+            Ok(frames) => self.send(frames).await,
             Err(message) => self.fail(message).await,
         }
     }
@@ -165,44 +179,27 @@ impl StreamEncoder for GeminiStreamEncoder {
     }
 }
 
-/// GEM-9: `{"error": {"code": <HTTP status>, "message", "status": <canonical status>}}`. A URP
-/// code that is a Google canonical status name selects that status; any other is `INTERNAL`.
-fn error_frame(code: Option<String>, message: String, extra_body: HashMap<String, Value>) -> Value {
-    let mut error: Map<String, Value> = extra_body
-        .into_iter()
-        .filter(|(key, _)| {
-            !is_internal_key(key) && !matches!(key.as_str(), "code" | "message" | "status")
-        })
-        .collect();
-    let status = code
-        .as_deref()
-        .filter(|code| google_status_http_code(code).is_some())
-        .unwrap_or("INTERNAL");
-    error.insert(
-        "code".into(),
-        json!(google_status_http_code(status).unwrap_or(500)),
-    );
-    error.insert("message".into(), json!(message));
-    error.insert("status".into(), json!(status));
-    Value::Object(Map::from_iter([(
-        "error".to_string(),
-        Value::Object(error),
-    )]))
+/// Takes the text out of a content frame whose Content has no native members and whose only
+/// Part is a plain text fragment. Clients merge consecutive such fragments of one kind into one
+/// Part (`wire::plain_fragment_kind`), so only this text can split without changing the Parts
+/// a client assembles.
+fn take_plain_fragment_text(frame: &mut Value) -> Option<String> {
+    let content = frame
+        .pointer_mut("/candidates/0/content")?
+        .as_object_mut()?;
+    if content.keys().any(|key| key != "role" && key != "parts") {
+        return None;
+    }
+    let [part] = content.get_mut("parts")?.as_array_mut()?.as_mut_slice() else {
+        return None;
+    };
+    wire::plain_fragment_kind(part)?;
+    match part["text"].take() {
+        Value::String(text) => Some(text),
+        _ => None,
+    }
 }
 
-fn google_status_http_code(status: &str) -> Option<u16> {
-    Some(match status {
-        "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => 400,
-        "UNAUTHENTICATED" => 401,
-        "PERMISSION_DENIED" => 403,
-        "NOT_FOUND" => 404,
-        "ABORTED" | "ALREADY_EXISTS" => 409,
-        "RESOURCE_EXHAUSTED" => 429,
-        "CANCELLED" => 499,
-        "UNKNOWN" | "INTERNAL" | "DATA_LOSS" => 500,
-        "UNIMPLEMENTED" => 501,
-        "UNAVAILABLE" => 503,
-        "DEADLINE_EXCEEDED" => 504,
-        _ => return None,
-    })
+fn patch_fragment_text(frame: &mut Value, text: &str) {
+    frame["candidates"][0]["content"]["parts"][0]["text"] = json!(text);
 }

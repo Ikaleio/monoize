@@ -138,16 +138,23 @@ pub(super) async fn execute_nonstream_typed_with_validator(
 
 pub(super) async fn forward_nonstream_typed_with_task_state(
     inputs: NonstreamRequest<'_>,
-    req: urp::UrpRequest,
+    mut req: urp::UrpRequest,
     client_session_id: Option<String>,
 ) -> AppResult<(Value, crate::error::ForwardedHeaders)> {
     let downstream = inputs.downstream;
+    let downstream_model = req.context.downstream_model.take();
     let (_, _, body, forwarded_headers) = execute_nonstream(
         inputs,
         req,
         client_session_id,
         true,
-        |resp, logical_model| encode_response_for_downstream(downstream, resp, logical_model),
+        |resp, logical_model| {
+            encode_response_for_downstream(
+                downstream,
+                resp,
+                downstream_model.as_deref().unwrap_or(logical_model),
+            )
+        },
     )
     .await?;
     Ok((body, forwarded_headers))

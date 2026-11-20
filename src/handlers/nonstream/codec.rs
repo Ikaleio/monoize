@@ -324,6 +324,9 @@ pub(in crate::handlers) fn encode_response_for_downstream(
         DownstreamProtocol::AnthropicMessages => {
             urp::encode::anthropic::encode_response_checked(resp, logical_model)
         }
+        DownstreamProtocol::Gemini => {
+            urp::encode::gemini::encode_response_checked(resp, logical_model)
+        }
     }
     .map_err(|message| AppError::new(StatusCode::BAD_GATEWAY, "unsupported_output_media", message))
 }

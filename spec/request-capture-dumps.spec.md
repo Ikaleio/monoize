@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Purpose:** Persist opt-in per-request diagnostic dumps for API-key-authenticated forwarding requests.
-- **Scope:** Applies to API-key-authenticated URP forwarding endpoints `POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/messages`, `POST /v1/images/generations`, and `POST /v1/images/edits` (including their `/api` aliases).
+- **Scope:** Applies to API-key-authenticated inference endpoints `POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/messages`, Gemini `generateContent` and `streamGenerateContent`, `POST /v1/images/generations`, and `POST /v1/images/edits` (including their `/api` aliases).
 - **Storage:** Dumps are filesystem files, not database rows.
 
 ## 1. Configuration
@@ -150,7 +150,7 @@ RCD-D2. A dump file MUST contain at least these top-level fields:
 
 RCD-D2a. Dump schema version 2 replaces version 1. Monoize MUST write only version-2 dumps. Version-1 files that already exist on disk are not migrated, are not registered in the capture metadata table (section 5), and are therefore unreachable through the capture detail API; orphan cleanup deletes them per RCD-R5a.
 
-RCD-D2b. `downstream_protocol` MUST be exactly one of: `responses`, `chat_completions`, `anthropic_messages`, `image_generations` (`POST /v1/images/generations` ingress), or `image_edits` (`POST /v1/images/edits` ingress).
+RCD-D2b. `downstream_protocol` MUST be exactly one of: `responses`, `chat_completions`, `anthropic_messages`, `gemini` (Gemini inference ingress), `image_generations` (`POST /v1/images/generations` ingress), or `image_edits` (`POST /v1/images/edits` ingress). A live Gemini stream MUST capture emitted payloads in SSE framing regardless of HTTP framing. The Gemini query credential MUST NOT appear in the capture.
 
 RCD-D2c. Dumps for Image API sub-requests MUST record `is_stream` equal to the parsed downstream `stream` flag (`image-api-proxy.spec.md` IG3/IE4): `false` for the non-streaming contract regardless of the internal upstream transport, `true` for the §5.5 streaming contract.
 

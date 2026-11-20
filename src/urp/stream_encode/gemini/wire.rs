@@ -224,7 +224,7 @@ fn suffix_fragment(previous: &EmittedNode, parts: &[Value]) -> Result<Value, Str
 
 /// `Some(thought)` for a Part that holds only text (and the thought flag): a fragment a client
 /// appends to an adjacent fragment of the same kind.
-fn plain_fragment_kind(part: &Value) -> Option<bool> {
+pub(super) fn plain_fragment_kind(part: &Value) -> Option<bool> {
     let part = part.as_object()?;
     part.get("text")?.as_str()?;
     let thought = part.get("thought").and_then(Value::as_bool) == Some(true);

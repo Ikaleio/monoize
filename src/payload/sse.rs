@@ -403,7 +403,8 @@ where
                 match frame {
                     Some(Ok(WireEvent::Bytes(bytes))) => return Ok(Some((bytes, (events, file)))),
                     Some(Ok(WireEvent::File(spool))) => {
-                        file = Some(super::file_stream(spool)?.boxed())
+                        let len = spool.len();
+                        file = Some(super::file_stream(spool, 0..len)?.boxed())
                     }
                     Some(Err(never)) => match never {},
                     None => return Ok::<_, io::Error>(None),
@@ -417,6 +418,70 @@ where
             (axum::http::header::CACHE_CONTROL, "no-cache"),
         ],
         axum::body::Body::from_stream(chunks),
+    )
+        .into_response()
+}
+
+/// Gemini frames always contain one unnamed JSON data line. Strip its transport
+/// delimiters without reserializing or reading a spooled payload into memory.
+pub(crate) fn json_array_response<S>(events: S) -> axum::response::Response
+where
+    S: futures_util::Stream<Item = Result<WireEvent, std::convert::Infallible>> + Send + 'static,
+{
+    use axum::response::IntoResponse;
+
+    type FileChunks = futures_util::stream::BoxStream<'static, io::Result<Bytes>>;
+    let chunks = futures_util::stream::try_unfold(
+        (events.boxed(), None::<WireEvent>, None::<FileChunks>, false),
+        |(mut events, mut pending, mut file, mut started)| async move {
+            const PREFIX: usize = b"data: ".len();
+            const SUFFIX: usize = b"\n\n".len();
+            loop {
+                if let Some(chunks) = &mut file {
+                    if let Some(chunk) = chunks.next().await {
+                        return Ok(Some((chunk?, (events, pending, file, started))));
+                    }
+                    file = None;
+                }
+                let frame = match pending.take() {
+                    Some(frame) => frame,
+                    None => match events.next().await {
+                        Some(Ok(frame)) if started => {
+                            return Ok(Some((
+                                Bytes::from_static(b","),
+                                (events, Some(frame), file, started),
+                            )));
+                        }
+                        Some(Ok(frame)) => frame,
+                        Some(Err(never)) => match never {},
+                        None => return Ok::<_, io::Error>(None),
+                    },
+                };
+                started = true;
+                match frame {
+                    WireEvent::Bytes(bytes) => {
+                        let data = bytes.slice(PREFIX..bytes.len() - SUFFIX);
+                        return Ok(Some((data, (events, pending, file, started))));
+                    }
+                    WireEvent::File(spool) => {
+                        let end = spool.len() - SUFFIX as u64;
+                        file = Some(super::file_stream(spool, PREFIX as u64..end)?.boxed());
+                    }
+                }
+            }
+        },
+    );
+    let body = futures_util::stream::once(async { Ok::<_, io::Error>(Bytes::from_static(b"[")) })
+        .chain(chunks)
+        .chain(futures_util::stream::once(async {
+            Ok(Bytes::from_static(b"]"))
+        }));
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json"),
+            (axum::http::header::CACHE_CONTROL, "no-cache"),
+        ],
+        axum::body::Body::from_stream(body),
     )
         .into_response()
 }

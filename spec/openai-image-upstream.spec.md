@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Subsystem:** OpenAI Image upstream channel type.
-- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/images/generations`, `/v1/images/edits`) and forwards them through an attempt whose effective upstream type is `openai_image`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests with user image inputs use `POST /v1/images/edits`. Inline Base64 inputs use multipart. URL or file-reference inputs use JSON.
+- **Scope:** Monoize accepts downstream requests via any supported ingress endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, Gemini `generateContent` and `streamGenerateContent`, `/v1/images/generations`, `/v1/images/edits`) and forwards them through an attempt whose effective upstream type is `openai_image`. Text-only requests are sent to `POST /v1/images/generations` as JSON. Requests with user image inputs use `POST /v1/images/edits`. Inline Base64 inputs use multipart. URL or file-reference inputs use JSON.
 - **Dependency:** This spec extends `unified_responses_proxy.spec.md` §7 (Adapters) and `monoize-upstream-routing.spec.md` §2.3 (Provider).
 
 ## 1. Terminology

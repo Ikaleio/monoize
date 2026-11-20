@@ -84,11 +84,11 @@ pub(super) fn upstream_path_for_model(
 ) -> String {
     match provider_type {
         ProviderType::Gemini => {
-            let model = model.trim();
+            let model = gemini_upstream_model(model);
             if stream {
-                format!("/v1beta/models/{model}:streamGenerateContent?alt=sse")
+                gemini_model_path(model, "streamGenerateContent?alt=sse")
             } else {
-                format!("/v1beta/models/{model}:generateContent")
+                gemini_model_path(model, "generateContent")
             }
         }
         ProviderType::Replicate => {
@@ -103,6 +103,28 @@ pub(super) fn upstream_path_for_model(
         }
         _ => upstream_path(provider_type).to_string(),
     }
+}
+
+pub(super) fn gemini_upstream_model(model: &str) -> &str {
+    let model = model.trim();
+    model.strip_prefix("models/").unwrap_or(model)
+}
+
+pub(super) fn gemini_model_path(model: &str, action: &str) -> String {
+    const PATH_ESCAPES: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b'#')
+        .add(b'%')
+        .add(b'<')
+        .add(b'>')
+        .add(b'?')
+        .add(b'\\')
+        .add(b'`')
+        .add(b'{')
+        .add(b'}');
+    let model = percent_encoding::utf8_percent_encode(model, PATH_ESCAPES);
+    format!("/v1beta/models/{model}:{action}")
 }
 
 pub(super) async fn resolve_model_suffix(
@@ -198,16 +220,24 @@ async fn normalized_logical_model_for_matching_with_map(
 /// AT-4: the set of effective API types that an endpoint may route to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteSurface {
-    /// Every forwarding endpoint other than the decision endpoints.
+    /// Every forwarding endpoint other than token counting and the decision endpoints.
     Generation,
+    /// Token counting, which only `messages` and `gemini` attempts serve (DMC2).
+    CountTokens,
     /// `/v1/systemone` and `/v1/decisions`.
     Decision,
 }
 
 impl RouteSurface {
     fn admits(self, api_type: crate::monoize_routing::MonoizeProviderType) -> bool {
-        let is_decision = api_type.to_config_type().decision_format().is_some();
-        is_decision == (self == Self::Decision)
+        let provider_type = api_type.to_config_type();
+        match self {
+            Self::Generation => provider_type.decision_format().is_none(),
+            Self::CountTokens => {
+                matches!(provider_type, ProviderType::Messages | ProviderType::Gemini)
+            }
+            Self::Decision => provider_type.decision_format().is_some(),
+        }
     }
 }
 
@@ -225,6 +255,14 @@ pub(super) async fn build_decision_attempts(
     auth: &crate::auth::AuthResult,
 ) -> AppResult<Vec<MonoizeAttempt>> {
     build_attempts(state, urp, auth, RouteSurface::Decision, None).await
+}
+
+pub(super) async fn build_count_attempts(
+    state: &AppState,
+    urp: &UrpRequest,
+    auth: &crate::auth::AuthResult,
+) -> AppResult<Vec<MonoizeAttempt>> {
+    build_attempts(state, urp, auth, RouteSurface::CountTokens, None).await
 }
 
 pub(super) async fn build_monoize_attempts_for_provider_type(

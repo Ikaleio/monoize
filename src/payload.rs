@@ -380,8 +380,14 @@ impl Read for TextReader<'_> {
 
 pub(crate) fn file_stream(
     spool: Arc<Spool>,
+    range: std::ops::Range<u64>,
 ) -> io::Result<impl Stream<Item = io::Result<Bytes>> + Send + 'static> {
-    let file = tokio::fs::File::from_std(spool.open()?);
+    use tokio::io::AsyncReadExt;
+    let mut file = spool.open()?;
+    if range.start != 0 {
+        file.seek(SeekFrom::Start(range.start))?;
+    }
+    let file = tokio::fs::File::from_std(file).take(range.end - range.start);
     Ok(
         tokio_util::io::ReaderStream::with_capacity(file, CHUNK).map(move |chunk| {
             let _spool = &spool;
@@ -447,15 +453,16 @@ pub(crate) fn http_limit(large: bool) -> usize {
 
 pub(crate) fn large_route(method: &axum::http::Method, path: &str) -> bool {
     method == axum::http::Method::POST
-        && matches!(
+        && (matches!(
             path.strip_prefix("/api").unwrap_or(path),
             "/v1/responses"
                 | "/v1/codex/responses"
                 | "/v1/chat/completions"
                 | "/v1/messages"
+                | "/v1/messages/count_tokens"
                 | "/v1/images/generations"
                 | "/v1/images/edits"
-        )
+        ) || crate::handlers::gemini::model_tail(path).is_some())
 }
 
 pub(crate) struct JsonBody(pub(crate) Value);

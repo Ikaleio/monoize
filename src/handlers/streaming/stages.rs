@@ -60,16 +60,9 @@ pub(super) async fn probe_stream_first_output(
                 message,
                 extra_body,
             }) => {
-                let explicit_status = extra_body
-                    .get("status")
-                    .or_else(|| {
-                        extra_body
-                            .get("error")
-                            .and_then(|error| error.get("status"))
-                    })
-                    .and_then(Value::as_u64)
-                    .filter(|status| (400..=599).contains(status))
-                    .and_then(|status| StatusCode::from_u16(status as u16).ok());
+                let explicit_status =
+                    crate::error::StreamErrorDetails::from_urp(code.as_deref(), &extra_body)
+                        .explicit_status;
                 let _ = decode_handle.await;
                 let mut guard = runtime_metrics.lock().await;
                 let terminal = guard.terminal.terminal_error.as_ref();

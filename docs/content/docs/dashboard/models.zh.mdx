@@ -73,7 +73,7 @@ Models.dev 同步会把按上下文窗口划分的阶梯价格和 Fast 模式价
 
 ## 模型列表
 
-`GET /v1/models` 返回调用方 API 密钥可用的逻辑模型。结果反映密钥的模型限制和分组归属。
+`GET /v1/models` 返回 API 密钥的模型限制所允许的已启用逻辑模型。`GET /v1beta/models` 以 Gemini 格式返回同一批模型。模型元数据定义了 Token 上限时，Gemini 描述会包含这些上限。
 
 ## 模型通配符
 

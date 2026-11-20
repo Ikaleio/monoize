@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 下列每個端點都有 `/api` 前綴別名，例如 `/api/v1/chat/completions`。當用戶端硬編碼了 `/api` 路徑時使用別名。
 
-任何端點都可以到達任何上游類型。例如，用戶端呼叫 `/v1/messages`，而路由透過 `chat_completion` 類型的 Channel 服務該模型。Monoize 在兩個方向上轉換協議。決策 Channel 例外，參見下文「決策」一節。
+Monoize 在支援的協定之間轉換推理請求與回應。例如，用戶端可透過 `/v1/messages` 呼叫 `chat_completion` Channel。Token 統計和決策端點各有自己的 Channel 要求。
 
 Chat 路由會保留 OpenRouter 的 `configuration_update` 訊息，包括空內容更新。檔案 data URI 轉成 Messages 文件時會保留 MIME 類型。Messages 串流會保留 `citations_delta` 引用。Responses 內容過濾終止會保留為未完成狀態，不會誤報為長度限制。
 
@@ -272,15 +272,25 @@ Monoize 轉送明確指定的 `thinking` 和 `output_config` 控制參數，不�
 
 `POST /v1/messages/count_tokens` 的認證、重新導向和模型限制與 `/v1/messages` 相同。
 
-- Monoize 依路由順序只嘗試 `messages` Channel，轉送請求體時只替換 `model`。
+- Monoize 依路由順序轉換請求，再送往 `messages` 或 `gemini` Channel。Messages 用戶端收到 `input_tokens`。
 - 沒有這類 Channel 時傳回 `404 not_found_error`。Claude Code 隨後改用本地估算。
 - 此端點不計費，不寫入請求日誌，也不改變 Channel 健康狀態。
 
-## Gemini 上游
+## Gemini GenerateContent
 
-將 Channel 的上游類型設為 `gemini`，即可透過現有端點使用 Gemini。此支援不新增公開的 Gemini HTTP 端點，也不包含 Live API。
+呼叫 `/v1beta/models/{model}:generateContent` 取得單一 JSON 回應。呼叫 `:streamGenerateContent` 取得串流 JSON 陣列，或加上 `?alt=sse` 取得 SSE。呼叫 `:countTokens` 時，傳送 `contents` 或巢狀的 `generateContentRequest`。三個 POST 端點都能以 `/v1` 取代 `/v1beta`。路徑指定模型，操作名稱決定是否以串流回應。
 
-Monoize 雙向轉換 `generateContent` 請求、回應和對話歷程。串流回應使用 `streamGenerateContent` SSE。
+使用 `x-goog-api-key` 標頭或 `key` 查詢參數驗證。也可以使用上文的請求標頭。Monoize 在記錄日誌、擷取和轉送之前移除 `key` 查詢參數。
+
+使用 `GET /v1beta/models` 取得可見模型的 Gemini 格式清單。使用 `GET /v1beta/models/{model}` 取得單一模型。`GET /v1/models` 維持 OpenAI 格式。
+
+Token 統計只使用 `messages` 和 `gemini` Channel。回應包含 `totalTokens`，以及 Gemini 上游提供的快取或模態計數。統計不計費，也不寫入請求日誌。
+
+Gemini 錯誤格式為 `{"error":{"code":404,"message":"model not found","status":"NOT_FOUND"}}`。SSE 不會傳送 `[DONE]`。Gemini 串流不傳送心跳，因為 Gemini SDK 的解析器無法處理 SSE 註解。請將代理的閒置逾時設定為長於最慢的預期生成時間。
+
+### Gemini 上游 Channel
+
+將 Channel 類型設為 `gemini`，即可將支援的推理請求路由至 Gemini 上游。Monoize 雙向轉換對話歷程。上游串流請求使用 `streamGenerateContent` SSE。不支援 Live API。
 
 - 文字、推理、函式呼叫、函式結果和支援的媒體保留順序與識別資訊。
 - 其他協定把文字和媒體上的思考簽章作為不透明推理值攜帶。原樣重播這些值，即可把每個簽章還原到對應 Part。
@@ -538,6 +548,7 @@ Monoize 在上游嘗試被接受後傳送 SSE 回應標頭。之後的失敗無�
 - `/v1/responses` 傳送扁平的 `error` 事件，包含 `code`、`message` 和 `param`，沒有 `[DONE]`。
 - 上游的 `response.failed` 仍為 `response.failed`，保留部分輸出和用量。
 - `/v1/messages` 傳送帶 `request_id` 的 `error` 事件，沒有 `[DONE]`。
+- Gemini 串流把 Gemini 錯誤物件作為最後一個 SSE 事件或 JSON 陣列元素傳送。
 
 ### 限流標頭
 

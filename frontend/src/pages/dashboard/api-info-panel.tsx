@@ -29,6 +29,11 @@ const ENDPOINTS = [
     path: "/v1/messages",
   },
   { labelKey: "dashboard.api.models", fallback: "Models", path: "/v1/models" },
+  {
+    labelKey: "dashboard.api.gemini",
+    fallback: "Gemini",
+    path: "/v1beta/models/{model}:generateContent",
+  },
 ] as const;
 
 /** DH-8c: one row-sized copy button with the shared copy feedback. */

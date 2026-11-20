@@ -2,8 +2,8 @@
 
 ## Scope and sources
 
-GEM-1. This specification covers `generateContent` and SSE `streamGenerateContent` request, response, and assistant-history conversion through URP.
-It does not add public HTTP endpoints or implement Live, file management, caching management, embeddings, or batch scheduling.
+GEM-1. This specification covers `generateContent` and `streamGenerateContent` request, response, and assistant-history conversion through URP in both directions. Public Gemini HTTP endpoints follow `unified_responses_proxy.spec.md` §2.2.2; token counting follows §7.8.1.
+Live, file management, caching management, embeddings, and batch scheduling are out of scope.
 The shared URP specifications remain authoritative for node ownership, runtime context, and terminal output.
 
 Source review date: 2026-10-31. Google labels this API "Gemini Generate Content API (Legacy)"; the Interactions API is out of scope.
@@ -96,12 +96,20 @@ Unrepresentable replacement or retraction after emission MUST fail explicitly.
 A late signature MUST fail when earlier wire merging would bind it to text from another canonical node.
 A signature carrier emits as a standalone `{"text": "", "thoughtSignature": …}` Part, the documented streaming shape, because an emitted Part cannot be amended.
 Terminal-only nodes MUST be emitted from authoritative ResponseDone.output.
-An error event encodes as `{"error": {"code": <HTTP status>, "message", "status": <canonical status>}}`; a URP error code that is a Google canonical status name selects that status and its HTTP code, and any other code encodes as `INTERNAL` / 500.
+An error event encodes as `{"error": {"code": <HTTP status>, "message": <string>, "status": <canonical status>}}` with the status mapping in `unified_responses_proxy.spec.md` DG5.
+
+GEM-9a. Downstream SSE and JSON-array streams MUST carry the same ordered sequence of JSON objects, each a GenerateContentResponse or one GEM-9 error object.
+
+- SSE: each object MUST be one event with the exact bytes `data: <object>\n\n`, without `event:` or `id:` lines. The stream MUST NOT contain `[DONE]`.
+- JSON array: the body MUST be `[`, then the objects separated by `,`, then `]`. Monoize MUST write each object to the response body when the encoder produces it. It MUST NOT wait for later objects or for the terminal event.
+- SSE and JSON-array streams MUST NOT emit heartbeat frames: no SSE comment lines in SSE and no extra bytes between array elements. Reason: the `@google/genai` JavaScript SDK reads SSE with `/^data: (.*)(?:\n\n|\r\r|\r\n\r\n)/` anchored at the buffer start. A comment line before a `data:` line never matches, so the SDK stalls and then fails with "Incomplete JSON segment".
+- A failure after `COMMIT` (`unified_responses_proxy.spec.md` FP4e) MUST be the last object. SSE then closes the stream. The JSON array then writes `]` and closes the stream.
 
 GEM-10. A native finish reason or prompt block establishes terminal completion.
 EOF and `[DONE]` alone MUST NOT establish completion. Idle silence after terminal completion ends the stream successfully (PG5b1).
 Usage and metadata after the finish reason MAY update the terminal snapshot; later content MUST NOT extend the completed answer.
 Malformed JSON, transport failure, and native error objects MUST terminate with an error and MUST NOT emit successful ResponseDone.
+A native error object's numeric `code` in 400–599 becomes the URP `Error` member `status` and the synthesized terminal HTTP status; without it the synthesized status is 502.
 The encoder MUST emit terminal metadata once and ignore events after termination.
 A completed canonical ResponseDone without a finish reason MUST emit STOP in SSE.
 Queued and in-progress outcomes MUST NOT terminate an SSE stream as completed output.

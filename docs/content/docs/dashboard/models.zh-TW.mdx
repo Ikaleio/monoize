@@ -73,7 +73,7 @@ Models.dev 同步會把依上下文視窗劃分的階梯價格和 Fast 模式價
 
 ## 模型列表
 
-`GET /v1/models` 回傳呼叫方 API 金鑰可用的邏輯模型。結果反映金鑰的模型限制和群組歸屬。
+`GET /v1/models` 回傳 API 金鑰的模型限制所允許的已啟用邏輯模型。`GET /v1beta/models` 以 Gemini 格式回傳同一批模型。模型中繼資料定義了 Token 上限時，Gemini 描述會包含這些上限。
 
 ## 模型萬用字元
 

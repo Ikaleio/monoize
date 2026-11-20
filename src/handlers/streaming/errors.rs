@@ -1,11 +1,5 @@
 use super::*;
-
-const CREDENTIAL_ERROR_SIGNALS: [&str; 4] = [
-    "authentication_error",
-    "invalid_api_key",
-    "permission_error",
-    "permission_denied",
-];
+use crate::error::StreamErrorDetails;
 
 /// STRM-2b: an explicit frame `status` wins. Decoders synthesize a status for a
 /// frame without one, so well-known retryable classes must not reach the client
@@ -19,19 +13,18 @@ pub(super) fn pre_output_error_status(
     if let Some(status) = explicit {
         return status;
     }
-    let signal = |expected: &[&str]| {
-        expected.contains(&code) || error_type.is_some_and(|value| expected.contains(&value))
+    let details = StreamErrorDetails {
+        code: Some(code),
+        error_type,
+        ..Default::default()
     };
-    if signal(&CREDENTIAL_ERROR_SIGNALS) {
+    if details.is_credential_failure() {
         return StatusCode::UNAUTHORIZED;
     }
-    if http_status == StatusCode::BAD_REQUEST.as_u16() {
-        if signal(&["rate_limit_exceeded", "rate_limit_error"]) {
-            return StatusCode::TOO_MANY_REQUESTS;
-        }
-        if signal(&["server_error", "api_error", "overloaded_error"]) {
-            return StatusCode::INTERNAL_SERVER_ERROR;
-        }
+    if http_status == StatusCode::BAD_REQUEST.as_u16()
+        && let Some(status) = details.implied_status()
+    {
+        return status;
     }
     StatusCode::from_u16(http_status).unwrap_or(StatusCode::BAD_GATEWAY)
 }
@@ -63,6 +56,10 @@ pub(super) async fn emit_stream_error_if_needed(
         DownstreamProtocol::AnthropicMessages => {
             (Some("error"), anthropic_stream_error_json(err, request_id))
         }
+        DownstreamProtocol::Gemini => (
+            None,
+            urp::encode::gemini::error_json(err.status, &err.message),
+        ),
     };
     let data = body.to_string();
     let event = Event::json_with_payload(event_name, &body, None)
@@ -86,23 +83,6 @@ pub(super) async fn emit_stream_error_if_needed(
     }
 }
 
-/// SE2a: the status used to derive a native type when the frame reports none.
-fn stream_error_status(explicit: Option<u64>, signal: impl Fn(&[&str]) -> bool) -> StatusCode {
-    if let Some(status) = explicit
-        .filter(|status| (400..=599).contains(status))
-        .and_then(|status| StatusCode::from_u16(status as u16).ok())
-    {
-        return status;
-    }
-    if signal(&["rate_limit_exceeded", "rate_limit_error"]) {
-        StatusCode::TOO_MANY_REQUESTS
-    } else if signal(&["server_error", "api_error", "overloaded_error"]) {
-        StatusCode::INTERNAL_SERVER_ERROR
-    } else {
-        StatusCode::BAD_GATEWAY
-    }
-}
-
 /// SE2a: reduces one error to the fields its downstream protocol renders. Raw
 /// frames, provider metadata and diagnostics stay in the logs and captures.
 fn native_stream_error(
@@ -111,52 +91,27 @@ fn native_stream_error(
     extra_body: &HashMap<String, Value>,
     request_id: Option<&str>,
     mask_sensitive_info: bool,
+    cancelled: bool,
 ) -> (Option<String>, HashMap<String, Value>) {
-    let nested = extra_body.get("error").and_then(Value::as_object);
-    let member = |key: &str| {
-        extra_body
-            .get(key)
-            .or_else(|| nested.and_then(|error| error.get(key)))
-    };
-    // A top-level `type: "error"` names the frame, not the error class.
-    let error_type = extra_body
-        .get("error_type")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            extra_body
-                .get("type")
-                .and_then(Value::as_str)
-                .filter(|value| *value != "error")
-        })
-        .or_else(|| {
-            nested
-                .and_then(|error| error.get("type"))
-                .and_then(Value::as_str)
-        })
-        .filter(|value| !value.is_empty());
-    let code = code.filter(|code| !code.is_empty());
-    let signal = |expected: &[&str]| {
-        code.is_some_and(|code| expected.contains(&code))
-            || error_type.is_some_and(|value| expected.contains(&value))
-    };
-    let status = stream_error_status(member("status").and_then(Value::as_u64), signal);
-    let credential =
-        matches!(status.as_u16(), 401 | 403 | 407) || signal(&CREDENTIAL_ERROR_SIGNALS);
+    let details = StreamErrorDetails::from_urp(code, extra_body);
+    let StreamErrorDetails {
+        code,
+        error_type,
+        param,
+        ..
+    } = details;
+    let status = details.status();
+    let credential = details.is_credential_failure();
     let mask =
         |text: &str| crate::error_sanitize::maybe_mask_sensitive_text(text, mask_sensitive_info);
-    let param = member("param")
-        .and_then(Value::as_str)
-        .filter(|_| !credential)
-        .map(mask);
-    let openai_type = if credential {
-        "server_error".to_string()
-    } else {
-        error_type
-            .map(mask)
-            .unwrap_or_else(|| openai_error_type_for_status(status).to_string())
-    };
+    let param = param.filter(|_| !credential).map(mask);
     let mut native = HashMap::new();
     let native_code = match downstream {
+        DownstreamProtocol::Gemini => {
+            let status = urp::encode::gemini::error_status(details, cancelled);
+            native.insert("status".to_string(), json!(status.as_u16()));
+            None
+        }
         DownstreamProtocol::AnthropicMessages => {
             let mut err = AppError::new(
                 if credential {
@@ -182,6 +137,13 @@ fn native_stream_error(
             None
         }
         DownstreamProtocol::ChatCompletions => {
+            let openai_type = if credential {
+                "server_error".to_string()
+            } else {
+                error_type
+                    .map(mask)
+                    .unwrap_or_else(|| openai_error_type_for_status(status).to_string())
+            };
             native.insert("type".to_string(), Value::String(openai_type));
             native.insert(
                 "param".to_string(),
@@ -228,6 +190,7 @@ pub(super) fn normalize_stream_error_event(
                 extra_body,
                 request_id,
                 mask_sensitive_info,
+                false,
             );
             *code = native_code;
             *extra_body = native;
@@ -248,18 +211,29 @@ pub(in crate::handlers) fn normalize_outcome_error(
     request_id: Option<&str>,
     mask_sensitive_info: bool,
 ) {
-    let Some(error) = outcome.as_mut().and_then(|outcome| outcome.error.as_mut()) else {
+    let Some(outcome) = outcome.as_mut() else {
         return;
     };
-    let (native_code, native) = native_stream_error(
-        downstream,
-        error.code.as_deref(),
-        &error.extra_body,
-        request_id,
-        mask_sensitive_info,
-    );
-    error.code = native_code;
-    error.extra_body = native;
+    // DG2a rule 1: a native Gemini finish keeps its reason in `code`, which the encoder emits
+    // as `finishReason`.
+    let native_finish = matches!(downstream, DownstreamProtocol::Gemini)
+        && urp::encode::gemini::native_failure_finish(outcome).is_some();
+    let cancelled = outcome.status == urp::ResponseStatus::Cancelled;
+    let Some(error) = outcome.error.as_mut() else {
+        return;
+    };
+    if !native_finish {
+        let (native_code, native) = native_stream_error(
+            downstream,
+            error.code.as_deref(),
+            &error.extra_body,
+            request_id,
+            mask_sensitive_info,
+            cancelled,
+        );
+        error.code = native_code;
+        error.extra_body = native;
+    }
     if let Some(message) = &error.message {
         error.message = Some(crate::error_sanitize::maybe_mask_sensitive_text(
             message,

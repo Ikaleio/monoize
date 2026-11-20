@@ -16,12 +16,19 @@ pub(super) struct StreamRequest {
     pub(super) started_at: std::time::Instant,
     pub(super) transform_match_model: String,
     pub(super) logical_model: String,
+    downstream_model: Option<String>,
     pub(super) chat_include_usage: bool,
     pub(super) reasoning_effort: Option<String>,
     pub(super) pending_request_envelope_extra: Option<HashMap<String, Value>>,
 }
 
 impl StreamRequest {
+    pub(super) fn downstream_model(&self) -> &str {
+        self.downstream_model
+            .as_deref()
+            .unwrap_or(&self.logical_model)
+    }
+
     pub(super) fn log_context(&self) -> RequestLogContext<'_> {
         RequestLogContext {
             model: &self.logical_model,
@@ -216,6 +223,7 @@ pub(in crate::handlers) async fn forward_stream_typed(
     let transform_match_model = resolve_model_suffix(&state, &mut req).await?;
     let request = StreamRequest {
         logical_model: req.model.clone(),
+        downstream_model: req.context.downstream_model.take(),
         chat_include_usage: req
             .extra_body
             .get("stream_options")

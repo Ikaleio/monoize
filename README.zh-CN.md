@@ -6,7 +6,7 @@
 
 **AI API 接口形式相似，但底层协议约定各不相同。**
 
-Monoize 是基于 Rust 开发的 AI API 网关。它在网关层完成 OpenAI Responses、Chat Completions、Anthropic Messages 之间的语义转换，将一个逻辑模型路由到多个上游 Channel，并在单个进程内提供管理控制台。
+Monoize 是用 Rust 编写的 AI API 网关。它在 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini GenerateContent 之间转换协议。它将一个逻辑模型路由到多个上游 Channel，并在同一进程内提供管理控制台。
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -61,7 +61,7 @@ HTTP `408`、HTTP `429`、HTTP `5xx`、超时与连接错误可在重试限制�
 
 ## 功能范围
 
-**协议转换**：Responses、Chat Completions、Messages 之间的流式与非流式互转；Gemini、OpenAI 图像 API 与 Replicate 作为上游接入。
+**协议转换**：在 Responses、Chat Completions、Messages 和 Gemini 之间转换流式与非流式请求。也可以接入 OpenAI 图像 API 和 Replicate 上游。
 
 **路由**：Provider 有序回退、Channel 权重分流、熔断与主动探测、Channel 亲和性、按 API Key 的模型重定向。
 
@@ -88,7 +88,7 @@ HTTP `408`、HTTP `429`、HTTP `5xx`、超时与连接错误可在重试限制�
 ## 请求路径
 
 ```text
-客户端协议 (Responses / Chat Completions / Messages)
+客户端协议 (Responses / Chat Completions / Messages / Gemini)
     │
     ▼
 解码为 URP v2
@@ -200,13 +200,18 @@ curl http://localhost:8080/v1/chat/completions \
 | `POST` | `/v1/responses/compact` | Responses 上下文压缩 |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/messages/count_tokens` | 通过 `messages` 或 `gemini` 统计 Messages Token |
+| `POST` | `/v1beta/models/{model}:generateContent` | Gemini JSON 响应 |
+| `POST` | `/v1beta/models/{model}:streamGenerateContent` | Gemini 流式 JSON 数组，或用 `?alt=sse` 获取 SSE |
+| `POST` | `/v1beta/models/{model}:countTokens` | 通过 `messages` 或 `gemini` 统计 Gemini Token |
+| `GET` | `/v1beta/models` 和 `/v1beta/models/{model}` | Gemini 模型列表和详情 |
 | `POST` | `/v1/embeddings` | Embeddings |
 | `POST` | `/v1/systemone` | System One 决策 |
 | `POST` | `/v1/decisions` | OpenAI Decisions |
 | `POST` | `/v1/images/generations` | 图像生成 |
 | `POST` | `/v1/images/edits` | 使用 multipart 上传或 JSON 引用编辑图像 |
 
-所有转发端点均有 `/api/v1/...` 别名。
+在转发路径前添加 `/api` 即可使用别名。三个 Gemini POST 端点都支持 `/v1beta` 和 `/v1`。Gemini 模型查询使用 `/v1beta`。
 
 ### 上游 Channel 类型
 
@@ -230,7 +235,7 @@ curl http://localhost:8080/v1/chat/completions \
 | `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP 监听地址 |
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite 或 PostgreSQL DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus 指标路径 |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP 请求体大小上限（字节）。Responses、Chat Completions、Messages 和 Images POST 路由默认使用 `10737418240`。 |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP 请求体大小上限（字节）。Responses 推理、Chat Completions、Messages、Gemini 和 Images POST 路由默认使用 `10737418240`。 |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | 受信任的反向代理网段；显式设为空则禁用 |
 | `MONOIZE_UPSTREAM_PROXY_URL` | 未设置 | 节点级出站 HTTP(S) 代理；Channel 可通过 `proxy_url` 覆盖 |
 | `MONOIZE_CAP_API_ENDPOINT` | 未设置 | 外部 Cap 站点端点；未设置时使用内置 Cap 服务 |

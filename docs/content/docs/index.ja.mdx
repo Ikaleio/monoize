@@ -5,7 +5,7 @@ description: Rust 製の AI API ゲートウェイ。プロトコルの意味論
 
 ## 概要
 
-Monoize は Rust 製の AI API ゲートウェイです。OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、埋め込み、画像形式のリクエストを受け付けます。リクエストを設定済みの上流 Channel へ転送し、クライアントが使用したプロトコルでレスポンスを返します。
+Monoize は Rust 製の AI API ゲートウェイです。OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Gemini GenerateContent、埋め込み、画像のリクエストを受け付けます。リクエストを設定済みの上流 Channel へ転送し、クライアントが使用したプロトコルでレスポンスを返します。
 
 Monoize はフィールド名ではなく、プロトコルの意味論を変換します。各リクエストを型付きの内部表現へデコードし、選択された上流プロトコルへエンコードします。レスポンスは同じ経路を逆向きにたどります。テキスト、推論、暗号化された推論、ツール呼び出し、ツール結果、画像、使用量、ストリーム境界は、変換を通してそれぞれの役割を保持します。
 
@@ -26,14 +26,18 @@ Monoize はフィールド名ではなく、プロトコルの意味論を変換
 | `POST` | `/v1/responses/compact` | Responses コンパクション |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
-| `POST` | `/v1/messages/count_tokens` | Anthropic のトークン数計測（`messages` Channel のみ） |
+| `POST` | `/v1/messages/count_tokens` | `messages` または `gemini` で Messages のトークンを計測 |
+| `POST` | `/v1beta/models/{model}:generateContent` | Gemini の JSON レスポンス |
+| `POST` | `/v1beta/models/{model}:streamGenerateContent` | Gemini の JSON 配列ストリーム。`?alt=sse` で SSE |
+| `POST` | `/v1beta/models/{model}:countTokens` | `messages` または `gemini` で Gemini のトークンを計測 |
+| `GET` | `/v1beta/models` と `/v1beta/models/{model}` | Gemini モデルの一覧と詳細 |
 | `POST` | `/v1/embeddings` | 埋め込み |
 | `POST` | `/v1/images/generations` | 画像生成 |
 | `POST` | `/v1/images/edits` | マルチパート画像編集 |
 | `POST` | `/v1/systemone` | System One 意思決定 |
 | `POST` | `/v1/decisions` | OpenAI Decisions |
 
-すべての転送エンドポイントには `/api/v1/...` のエイリアスがあります。
+転送パスの先頭に `/api` を付けると別名を使えます。3 つの Gemini POST エンドポイントは `/v1beta` と `/v1` に対応します。Gemini モデルの取得には `/v1beta` を使います。
 
 ## 上流 Channel タイプ
 

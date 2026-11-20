@@ -83,6 +83,9 @@ pub fn build_app(state: AppState) -> Router {
             MakeRequestUuid,
         ))
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(
+            crate::handlers::gemini::remove_query_key,
+        ))
         // Security headers
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::HeaderName::from_static("x-content-type-options"),
@@ -140,6 +143,15 @@ async fn content_security_policy_middleware(
 fn build_v1_router() -> Router<AppState> {
     Router::new()
         .route("/v1/models", get(crate::handlers::list_models))
+        .route(
+            "/v1/models/{*model}",
+            post(crate::handlers::gemini::post_model),
+        )
+        .route("/v1beta/models", get(crate::handlers::gemini::get_models))
+        .route(
+            "/v1beta/models/{*model}",
+            get(crate::handlers::gemini::get_models).post(crate::handlers::gemini::post_model),
+        )
         .route(
             "/v1/responses",
             get(crate::handlers::responses_websocket).post(crate::handlers::create_response),

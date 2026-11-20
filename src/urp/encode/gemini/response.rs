@@ -5,34 +5,78 @@ use super::object_member;
 use super::parts::{content_extra, encode_node_part};
 use super::signatures::resolve_bound_signatures;
 use super::usage::encode_usage_metadata;
+use crate::error::StreamErrorDetails;
 use crate::urp::encode::merge_extra;
 use crate::urp::media::{error_body, prepare_nodes};
 use crate::urp::{
-    FinishReason, GEMINI_CANDIDATE_EXTRA_KEY, Node, OrdinaryRole, ProviderProtocol, ResponseStatus,
-    UrpResponse, citations, logprobs,
+    FinishReason, GEMINI_CANDIDATE_EXTRA_KEY, Node, OrdinaryRole, ProviderProtocol,
+    ResponseOutcome, ResponseStatus, UrpResponse, citations, logprobs,
 };
+use axum::http::StatusCode;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+
+/// DG2a rule 1 `R`: failed finish reasons that encode as a candidate, not as an error.
+const NATIVE_FAILURE_FINISH_REASONS: &[&str] = &[
+    "OTHER",
+    "MALFORMED_FUNCTION_CALL",
+    "UNEXPECTED_TOOL_CALL",
+    "TOO_MANY_TOOL_CALLS",
+    "MISSING_THOUGHT_SIGNATURE",
+    "MALFORMED_RESPONSE",
+    "IMAGE_OTHER",
+    "NO_IMAGE",
+];
+
+/// The `finishReason` and `finishMessage` of a failed outcome whose code is in `R`.
+pub(crate) fn native_failure_finish(outcome: &ResponseOutcome) -> Option<(&str, Option<&str>)> {
+    let error = outcome.error.as_ref()?;
+    let code = error.code.as_deref()?;
+    (outcome.status == ResponseStatus::Failed && NATIVE_FAILURE_FINISH_REASONS.contains(&code))
+        .then_some((code, error.message.as_deref()))
+}
 
 pub fn encode_response(resp: &UrpResponse, logical_model: &str) -> Value {
     encode_response_checked(resp, logical_model).unwrap_or_else(|message| error_body(&message))
 }
 
 pub fn encode_response_checked(resp: &UrpResponse, logical_model: &str) -> Result<Value, String> {
-    if let Some(body) = resp
-        .outcome
-        .as_ref()
-        .and_then(|outcome| outcome.failure_body(false))
-    {
-        return Ok(body);
+    if let Some((status, message)) = response_failure(resp) {
+        return Ok(super::error_json(status, message));
     }
     let output = prepare_response_nodes(&resp.output)?;
     Ok(encode_prepared_response(resp, output, logical_model))
 }
 
+/// DG2a rule 2: the HTTP error of a failed or cancelled outcome without a native finish.
+pub(crate) fn response_failure(resp: &UrpResponse) -> Option<(StatusCode, &str)> {
+    let outcome = resp.outcome.as_ref().filter(|outcome| {
+        matches!(
+            outcome.status,
+            ResponseStatus::Failed | ResponseStatus::Cancelled
+        )
+    })?;
+    if native_failure_finish(outcome).is_some() {
+        return None;
+    }
+    let cancelled = outcome.status == ResponseStatus::Cancelled;
+    let error = outcome.error.as_ref();
+    let details = error
+        .map(|error| StreamErrorDetails::from_urp(error.code.as_deref(), &error.extra_body))
+        .unwrap_or_default();
+    let status = super::error_status(details, cancelled);
+    let message = error
+        .and_then(|error| error.message.as_deref())
+        .unwrap_or(if cancelled {
+            "Upstream response was cancelled"
+        } else {
+            "Upstream response failed"
+        });
+    Some((status, message))
+}
+
 /// The Parts of one streamed node. A single node has no adjacent Part to bind, so its signature
 /// carriers stay standalone.
-#[cfg(test)]
 pub(crate) fn encode_response_node_parts(node: &Node) -> Result<Vec<Value>, String> {
     let mut parts: Vec<Value> = prepare_response_nodes(std::slice::from_ref(node))?
         .iter()
@@ -84,7 +128,13 @@ fn encode_prepared_response(resp: &UrpResponse, output: Vec<Node>, logical_model
     let mut candidate = Map::new();
     candidate.insert("index".into(), json!(0));
     candidate.insert("content".into(), Value::Object(content));
-    if let Some(reason) = response_finish_reason(resp) {
+    // DG2a rule 1: the decoder moved a native failure's `finishMessage` into the typed error.
+    if let Some((reason, message)) = resp.outcome.as_ref().and_then(native_failure_finish) {
+        candidate.insert("finishReason".into(), json!(reason));
+        if let Some(message) = message {
+            candidate.insert("finishMessage".into(), json!(message));
+        }
+    } else if let Some(reason) = response_finish_reason(resp) {
         candidate.insert(
             "finishReason".into(),
             json!(finish_reason_to_gemini(reason)),

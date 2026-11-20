@@ -221,6 +221,7 @@ pub(crate) enum CaptureDownstreamProtocol {
     Responses,
     ChatCompletions,
     AnthropicMessages,
+    Gemini,
     ImageGenerations,
     ImageEdits,
 }
@@ -231,6 +232,7 @@ impl From<DownstreamProtocol> for CaptureDownstreamProtocol {
             DownstreamProtocol::Responses => Self::Responses,
             DownstreamProtocol::ChatCompletions => Self::ChatCompletions,
             DownstreamProtocol::AnthropicMessages => Self::AnthropicMessages,
+            DownstreamProtocol::Gemini => Self::Gemini,
         }
     }
 }
@@ -514,6 +516,7 @@ fn downstream_protocol_name(protocol: CaptureDownstreamProtocol) -> &'static str
         CaptureDownstreamProtocol::Responses => "responses",
         CaptureDownstreamProtocol::ChatCompletions => "chat_completions",
         CaptureDownstreamProtocol::AnthropicMessages => "anthropic_messages",
+        CaptureDownstreamProtocol::Gemini => "gemini",
         CaptureDownstreamProtocol::ImageGenerations => "image_generations",
         CaptureDownstreamProtocol::ImageEdits => "image_edits",
     }

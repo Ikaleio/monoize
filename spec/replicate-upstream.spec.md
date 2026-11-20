@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-Monoize supports Replicate as an **upstream provider type**, fully integrated into the URP pipeline. Downstream clients send requests via standard Monoize endpoints (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), and the URP encode/decode layer translates between the downstream format and Replicate's prediction API. This follows the same pattern as the Gemini upstream provider.
+Monoize supports Replicate as an **upstream provider type**. Downstream clients send requests to a URP inference endpoint, including Gemini. The URP codecs translate between the downstream format and Replicate's prediction API.
 
 ## 2. Provider Type
 

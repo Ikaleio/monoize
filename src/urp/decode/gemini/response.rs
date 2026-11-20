@@ -245,6 +245,10 @@ pub(crate) fn candidate_extra(candidate: &Map<String, Value>) -> HashMap<String,
             "groundingMetadata",
         ],
     );
+    // A failed finish owns `finishMessage` as its typed error message (`response_outcome`).
+    if native_finish_reason(candidate) == Some(FinishReason::Other) {
+        extra.remove("finishMessage");
+    }
     if let Some(metadata) = citations::gemini_metadata_extra(candidate) {
         extra.insert("groundingMetadata".into(), metadata);
     }

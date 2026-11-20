@@ -1,5 +1,4 @@
 pub mod anthropic;
-#[cfg(test)]
 pub mod gemini;
 pub mod openai_chat;
 pub mod openai_responses;
@@ -135,6 +134,7 @@ pub(crate) async fn encode_urp_stream(
         DownstreamProtocol::AnthropicMessages => {
             run(anthropic::MessagesStreamEncoder::new(tx, options), rx).await
         }
+        DownstreamProtocol::Gemini => run(gemini::GeminiStreamEncoder::new(tx, options), rx).await,
     }
 }
 
@@ -158,6 +158,9 @@ pub(crate) async fn replay_urp_response(
         }
         DownstreamProtocol::AnthropicMessages => {
             replay(anthropic::MessagesStreamEncoder::new(tx, options), response).await
+        }
+        DownstreamProtocol::Gemini => {
+            replay(gemini::GeminiStreamEncoder::new(tx, options), response).await
         }
     }
 }

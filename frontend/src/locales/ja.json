@@ -314,6 +314,7 @@
 			"chatCompletions": "Chat Completions",
 			"responses": "Responses",
 			"models": "Models",
+			"gemini": "Gemini",
 			"messages": "Messages"
 		},
 		"performance": {

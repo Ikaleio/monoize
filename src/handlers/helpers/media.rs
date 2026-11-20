@@ -449,7 +449,7 @@ mod media_resource_routing_tests {
             ),
             (
                 ProviderType::Gemini,
-                DownstreamProtocol::Responses,
+                DownstreamProtocol::Gemini,
                 json!({
                 "model":"test-model", "contents":[{"role":"user","parts":[
                     {"inlineData":{"mimeType":"image/png","data":png}},
@@ -572,12 +572,7 @@ mod media_resource_routing_tests {
                     if target_protocol == urp::ProviderProtocol::Responses {
                         urp::remove_downstream_only_reasoning_for_responses(&mut req.input);
                     }
-                    // Gemini has no downstream endpoint; its native fixture enters at the URP boundary.
-                    let same_family = if source == ProviderType::Gemini {
-                        target == source
-                    } else {
-                        downstream.is_same_family(target)
-                    };
+                    let same_family = downstream.is_same_family(target);
                     if candidate.strip_cross_protocol_nested_extra && !same_family {
                         urp::strip_nested_extra_body(&mut req.input);
                     }

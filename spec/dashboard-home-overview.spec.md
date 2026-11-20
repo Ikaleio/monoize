@@ -301,7 +301,7 @@ DH-8b. The effective base URL is the trimmed `api_base_url` when it is non-empty
 - the effective base URL. When `api_base_url` is empty, its label MUST be
   `dashboard.apiBaseUrlFallback` (zh: `当前站点地址（管理员未单独配置）`);
 - derived endpoint paths in this order: `/v1/chat/completions`, `/v1/responses`,
-  `/v1/messages`, `/v1/models`.
+  `/v1/messages`, `/v1/models`, `/v1beta/models/{model}:generateContent` (label `Gemini`).
 
 When `api_base_url` is empty and the role is `admin` or `super_admin`, the panel MUST also
 show a link to `/dashboard/admin-settings?setting=api_base_url`. Role `user` MUST NOT see a

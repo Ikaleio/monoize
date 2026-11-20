@@ -258,9 +258,34 @@ impl StreamForward {
         if matches!(
             attempt.provider_type,
             ProviderType::OpenaiImage | ProviderType::OpenrouterImage
-        ) && !matches!(downstream, DownstreamProtocol::Responses)
-        {
+        ) && matches!(
+            downstream,
+            DownstreamProtocol::ChatCompletions | DownstreamProtocol::AnthropicMessages
+        ) {
             convert_assistant_images_to_markdown(&mut resp);
+        }
+        // DG2a rule 2: the failed outcome settles as a served response, and the client gets its
+        // DG5 error before `COMMIT`. A native finish (rule 1) replays as a stream instead.
+        if matches!(downstream, DownstreamProtocol::Gemini)
+            && let Some((status, message)) = urp::encode::gemini::response_failure(&resp)
+        {
+            let mut err = AppError::new(status, "upstream_error", message);
+            if downstream.is_same_family(attempt.provider_type) {
+                err.forwarded_headers = forwarded_headers;
+            }
+            if let Some(foreign_extras) = foreign_extras {
+                foreign_extras.restore(&mut resp);
+            }
+            settle_replayed_response(
+                &self.request,
+                attempt,
+                &resp,
+                std::mem::take(&mut self.attempts.tried_providers),
+                self.request.commit.downstream_gone(),
+                upstream_response_model,
+            )
+            .await;
+            return Err(err);
         }
         Ok(SlotOutcome::Synthetic(Box::new(SyntheticStream {
             resp,
@@ -359,7 +384,7 @@ impl SyntheticReplay {
         let downstream = request.downstream;
         let tx_err = tx.clone();
         let encode_options = StreamEncodeOptions {
-            logical_model: request.logical_model.clone(),
+            logical_model: request.downstream_model().to_owned(),
             sse_max_frame_length,
             mask_sensitive_info,
             chat_include_usage: request.chat_include_usage,
@@ -397,7 +422,7 @@ impl SyntheticReplay {
         match stream_result {
             Ok(()) => {
                 settle_replayed_response(
-                    request,
+                    &request,
                     &attempt,
                     &resp,
                     tried_providers,
@@ -428,7 +453,7 @@ impl SyntheticReplay {
 
 /// Charges a replayed response and writes its request-log row and capture.
 async fn settle_replayed_response(
-    request: StreamRequest,
+    request: &StreamRequest,
     attempt: &MonoizeAttempt,
     resp: &urp::UrpResponse,
     tried_providers: Vec<TriedProvider>,

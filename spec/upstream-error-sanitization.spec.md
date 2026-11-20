@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Purpose:** Define exactly which parts of an upstream failure are exposed to downstream API clients, which parts are persisted in request logs, which parts each dashboard viewer role may read back, and which parts exist only in the server log.
-- **Scope:** Applies to every forwarding endpoint (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`, the Image API, compact, and the Responses WebSocket) for errors derived from upstream attempts, to the request-log persistence of those errors, to the dashboard request-log read paths that return those errors, and to mid-stream downstream error frames.
+- **Scope:** Applies to errors derived from upstream attempts on every forwarding endpoint, including Gemini inference and both token counting endpoints. Also applies to request-log persistence, dashboard request-log reads, and downstream stream error frames or array elements.
 - **Disclosure tiers.** There are exactly three disclosure tiers:
   1. **Client tier** — downstream API responses and mid-stream frames: masked or generic text only (sections 2, 4, 6).
   2. **Admin tier** — persisted request-log fields as read back by a dashboard user whose role satisfies `request-logs.spec.md` RL-API1 admin access (`admin` or `super_admin`): the full raw upstream detail, bounded only by `TRUNC` (sections 3, 5, 8).

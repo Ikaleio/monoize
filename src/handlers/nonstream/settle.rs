@@ -76,8 +76,10 @@ impl NonstreamRun<'_> {
         if matches!(
             attempt.provider_type,
             ProviderType::OpenaiImage | ProviderType::OpenrouterImage
-        ) && !matches!(downstream, DownstreamProtocol::Responses)
-        {
+        ) && matches!(
+            downstream,
+            DownstreamProtocol::ChatCompletions | DownstreamProtocol::AnthropicMessages
+        ) {
             convert_assistant_images_to_markdown(resp);
         }
         let history = self

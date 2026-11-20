@@ -59,7 +59,7 @@ impl StreamForward {
             reconstructed: reconstructed.clone(),
             history,
             encode_options: StreamEncodeOptions {
-                logical_model: request.logical_model.clone(),
+                logical_model: request.downstream_model().to_owned(),
                 sse_max_frame_length: plan.sse_max_frame_length,
                 mask_sensitive_info,
                 chat_include_usage: request.chat_include_usage,

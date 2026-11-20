@@ -6,10 +6,18 @@ pub(in crate::handlers) fn decode_urp_request(
     extra: Map<String, Value>,
 ) -> AppResult<urp::UrpRequest> {
     let merged = merge_known_and_extra(known, extra);
+    decode_urp_body(protocol, &merged)
+}
+
+pub(in crate::handlers) fn decode_urp_body(
+    protocol: DownstreamProtocol,
+    body: &Value,
+) -> AppResult<urp::UrpRequest> {
     let decoded = match protocol {
-        DownstreamProtocol::Responses => urp::decode::openai_responses::decode_request(&merged),
-        DownstreamProtocol::ChatCompletions => urp::decode::openai_chat::decode_request(&merged),
-        DownstreamProtocol::AnthropicMessages => urp::decode::anthropic::decode_request(&merged),
+        DownstreamProtocol::Responses => urp::decode::openai_responses::decode_request(body),
+        DownstreamProtocol::ChatCompletions => urp::decode::openai_chat::decode_request(body),
+        DownstreamProtocol::AnthropicMessages => urp::decode::anthropic::decode_request(body),
+        DownstreamProtocol::Gemini => urp::decode::gemini::decode_request(body),
     };
     decoded.map_err(|e| AppError::new(StatusCode::BAD_REQUEST, "invalid_request", e))
 }

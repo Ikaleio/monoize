@@ -49,7 +49,7 @@ DS6. Without `--only`, execute exactly 45 cases:
 | Responses multi-turn    |     1 | Two streamed reasoning turns; replay completed output items into turn two                               |
 | Chat multi-turn         |     1 | Two non-stream turns over Messages upstream; replay the first assistant message                         |
 | Messages multi-turn     |     1 | Two non-stream turns over reasoning Chat upstream; replay first response content                        |
-| Messages token counting |     3 | `/v1/messages/count_tokens` over each upstream protocol                                                 |
+| Messages token counting |     3 | `/v1/messages/count_tokens` over each upstream protocol; only the `messages` Channel is eligible (DMC2) |
 
 The downstream protocols are Responses, Chat Completions, and Messages.
 The upstream protocols are `responses`, `chat_completion`, and `messages`.

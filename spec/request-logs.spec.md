@@ -3,7 +3,7 @@
 ## 0. Status
 
 - **Purpose:** Record and expose per-request metadata for API-key-authenticated and classified internal proxy requests.
-- **Scope:** Applies to all forwarding endpoints (responses, chat completions, messages, embeddings, decisions) and the dashboard request-logs API.
+- **Scope:** Applies to forwarding endpoints, including Gemini inference in both stream formats, and the dashboard request-logs API. Token counting does not write a request log (DMC5). Gemini query credentials MUST NOT appear in request logs.
 
 ## 1. Data model
 

@@ -35,7 +35,7 @@
 
 ### 2.1 Authentication
 
-A1. Monoize MUST require API-key authentication for all non-dashboard endpoints listed in §2.2. Monoize MUST accept either `Authorization: Bearer <token>` or `x-api-key: <token>` as the downstream authentication header.
+A1. Monoize MUST require API-key authentication for all non-dashboard endpoints listed in §2.2. The credential sources and their precedence follow `api-key-authentication.spec.md` AK1–AK2a.
 
 A2. Monoize MUST map `<token>` to a tenant identity using dashboard-managed database API keys only.
 
@@ -57,7 +57,9 @@ Monoize MUST implement:
 - `POST /v1/responses/compact`
 - `POST /v1/chat/completions` (adapter)
 - `POST /v1/messages` (adapter)
-- `POST /v1/messages/count_tokens` (Messages-only pass-through, §7.8.1)
+- `POST /v1/messages/count_tokens` (URP token counting, §7.8.1)
+- `POST /{v1beta or v1}/models/{model}:generateContent`, `:streamGenerateContent`, and `:countTokens` (Gemini, §2.2.2)
+- `GET /v1beta/models` and `GET /v1beta/models/{model}` (Gemini model discovery, §2.2.2)
 - `POST /v1/embeddings` (pass-through)
 - `POST /v1/systemone` and `POST /v1/decisions` (decision forwarding, `decision-api.spec.md`)
 - `GET /v1/models` (model listing)
@@ -167,6 +169,23 @@ WS18. Steering successor turn. A successor turn started under WS2i MUST run on t
 
 WS19. Identifiers. Every response object a turn sends downstream MUST carry the turn's public response id and `previous_response_id` equal to the public `previous_response_id` the client sent (WS18 lineage for a successor; `null` otherwise). In every other event of the turn, every member named `response_id`, at any depth, MUST equal the public response id, except a frame that WS2h item 6 attributes to an earlier upstream response, which keeps that response's public id.
 
+### 2.2.2 Gemini downstream
+
+DG1. For a Gemini POST route in §2.2, let `T` be the path after `/v1beta/models/` or `/v1/models/`, after removing at most one leading `/api`. Split `T` at its last colon into `M` and the action. The action MUST match `generateContent`, `streamGenerateContent`, or `countTokens` case-sensitively. A `T` without a colon, or with another action, MUST return HTTP 404. Percent-decode `M` as UTF-8 and remove at most one leading `models/`. A `%` not followed by two hexadecimal digits stays a literal `%`. A decoded value that is not UTF-8, or an empty result, MUST return HTTP 400. The decoded model can contain `/`. Body `model` and `stream` values MUST NOT override the path model and the action.
+
+DG2. `generateContent` MUST return one JSON GenerateContentResponse. `streamGenerateContent` MUST return `text/event-stream` SSE when the form-decoded query contains the pair `alt=sse`. Otherwise it MUST return an `application/json` array. Both stream formats follow `gemini-codec.spec.md` GEM-9a, which forbids heartbeat frames. A failure before `COMMIT` (FP4e) MUST return one DG5 JSON error with the failure status, not an array and not SSE.
+
+DG2a. A `Failed` or `Cancelled` outcome of a decoded upstream response is a served response, not an FP4e terminal failure. It settles as on Chat Completions and Messages: the MP-F3 gate, Channel success and affinity refresh, response transforms, billing of its usage, a success request log, and the capture persist. The Gemini encoding of the outcome follows these rules:
+1. Let `R` be the set of Gemini `FinishReason` names `OTHER`, `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`, `TOO_MANY_TOOL_CALLS`, `MISSING_THOUGHT_SIGNATURE`, `MALFORMED_RESPONSE`, `IMAGE_OTHER`, and `NO_IMAGE`. A `Failed` outcome whose `error.code` is in `R` MUST encode as a GenerateContentResponse with HTTP 200. Its candidate carries the current output, `finishReason` equal to `error.code`, `finishMessage` equal to `error.message` when present, and the usage metadata. A stream emits this candidate as its terminal object. This rule applies in non-stream responses, live streams, and buffered stream replays.
+2. Every other `Failed` or `Cancelled` outcome MUST encode as a DG5 error. A non-stream response returns the DG5 body with HTTP status equal to `error.code`. A buffered stream returns the DG5 JSON error before `COMMIT`, with SE1d headers only on Gemini → Gemini. A live stream emits the DG5 error object as its last data event or array element (GEM-9a).
+3. The HTTP status for rule 2 is the RTA-8b credential mapping (502) for credential errors; otherwise the explicit numeric status when present; otherwise 499 for a cancellation; otherwise the DG5 mapping for an error without an HTTP status. Stream error events use the same function.
+
+DG3. Gemini inference MUST use the same authentication, IP checks, capture, model redirects, model limits, multiplier, Provider/Channel routing, fallback, billing, request logs, and transform pipeline as other URP inference. Requests MUST use the Gemini decoder. Responses and streaming events MUST use the Gemini encoders. A Gemini attempt is same-family only for Gemini ingress. The downstream `modelVersion` MUST use the logical model requested by the client before any redirect or upstream model mapping. Counting follows §7.8.1.
+
+DG4. The Gemini GET endpoints MUST return the model set that DMO4, DMO5, and DMO8 define for `GET /v1/models` `data`, in DMO6 order. A listed model MUST have `name` equal to `models/<logical id>`, `displayName` equal to its logical id, and `supportedGenerationMethods` equal to `["generateContent","streamGenerateContent","countTokens"]`. Emit `inputTokenLimit` and `outputTokenLimit` only when the model metadata defines the maximum input or output tokens. The list MUST be one `{"models":[...]}` object without `nextPageToken`. The detail endpoint decodes the path after `/v1beta/models/` with the DG1 model rules. It MUST return one Model, or HTTP 404 when the decoded id is not in the model set. The OpenAI `GET /v1/models` endpoint is unchanged.
+
+DG5. Every non-stream error and every streaming error before `COMMIT` on a Gemini endpoint MUST be JSON `{"error":{"code":<HTTP status>,"message":<string>,"status":<Google canonical status>}}` with exactly these members. This includes authentication, body-limit, counting, and discovery errors. `error.code` MUST equal the downstream HTTP status. The status mapping is 400 → `INVALID_ARGUMENT`, 401 → `UNAUTHENTICATED`, 403 → `PERMISSION_DENIED`, 404 → `NOT_FOUND`, 409 → `ABORTED`, 429 → `RESOURCE_EXHAUSTED`, 499 → `CANCELLED`, 500 → `INTERNAL`, 501 → `UNIMPLEMENTED`, 503 → `UNAVAILABLE`, 504 → `DEADLINE_EXCEEDED`, other status below 500 → `INVALID_ARGUMENT`, and other status → `INTERNAL`. An error without an HTTP status maps a Google canonical code to an HTTP status: each status name above to its listed HTTP status, `FAILED_PRECONDITION` and `OUT_OF_RANGE` to 400, `ALREADY_EXISTS` to 409, and `UNKNOWN` and `DATA_LOSS` to 500. Any other code or type uses the status that SE2a derives without a status: 429 for a rate-limit code or type, 500 for `server_error`, `api_error`, or `overloaded_error`, and otherwise 502. Non-stream and stream errors MUST use one shared mapping function. For upstream credential errors under RTA-8b, keep upstream diagnostics internal and return the three-member shape with status 502.
+
 ### 2.3 Dashboard API
 
 Monoize MUST implement dashboard endpoints under `/api/dashboard/*`.
@@ -205,7 +224,7 @@ PP4. Every provider preset `defaults` object MUST contain `provider_type`. It MU
 
 ## 3. Unknown fields policy
 
-F1. For URP-based downstream endpoints (`/v1/responses`, `/v1/chat/completions`, `/v1/messages`), Monoize MUST preserve unknown request keys under internal passthrough state and forward them to the upstream request under §7.6.
+F1. For URP inference endpoints, including Gemini, Monoize MUST preserve unknown request keys under internal passthrough state and forward them to the upstream request under §7.6.
 
 F2. Known fields are identified by key name only. No type-checking reclassification is performed. If a known key's value has an unexpected type, the decoder handles it on a best-effort basis, for example by ignoring an unparseable typed field and preserving the raw value in passthrough state when possible.
 
@@ -227,9 +246,9 @@ C3. Monoize MUST resolve listen address from `MONOIZE_LISTEN`, default `0.0.0.0:
 
 C4. Monoize MUST resolve metrics endpoint path from `MONOIZE_METRICS_PATH`, default `/metrics`.
 
-C5. Monoize MUST accept downstream request bodies up to the configured HTTP body limit on forwarding endpoints (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`). `MONOIZE_HTTP_BODY_MAX_BYTES` MUST select this limit when its trimmed value is a positive base-10 integer that fits `usize`; an unset, empty, zero, negative, malformed, or overflowing value MUST select the default `52428800` bytes. Any framework-default extractor limit smaller than the selected value MUST be disabled so that the selected value is the effective limit.
+C5. Monoize MUST accept downstream request bodies up to the configured HTTP body limit on forwarding endpoints (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`, the Gemini POST routes, `/v1/embeddings`). `MONOIZE_HTTP_BODY_MAX_BYTES` MUST select this limit when its trimmed value is a positive base-10 integer that fits `usize`; an unset, empty, zero, negative, malformed, or overflowing value MUST select the default `52428800` bytes. Any framework-default extractor limit smaller than the selected value MUST be disabled so that the selected value is the effective limit.
 
-C5a. The HTTP POST JSON routes for Responses, Chat Completions, Messages, and the
+C5a. The HTTP POST JSON routes for Responses inference, Chat Completions, Messages inference and counting, Gemini inference and counting, and the
 Images API MUST accept up to 10737418240 bytes by default, subject to C5's explicit
 environment override. Their successful upstream JSON responses and individual
 upstream SSE events MUST support the same size. Authenticate these requests before reading the body. Apply this default
@@ -310,7 +329,7 @@ FP4c. The request-shape observability log in FP4b MUST include at minimum:
 
 FP4d. For streaming upstream calls, Monoize MUST track terminal-stream evidence in memory during adaptation. At minimum the tracked evidence consists of whether a literal `[DONE]` sentinel was received, which terminal protocol event was last observed, the terminal finish reason when present, and whether Monoize emitted a synthetic terminal chunk. This evidence is observability-only and MUST NOT change downstream response semantics by itself.
 
-FP4e. Native pre-output errors. Let `COMMIT` be the instant Monoize returns downstream SSE response headers (FP4h). For `POST /v1/responses`, `POST /v1/chat/completions`, and `POST /v1/messages`, with `stream` true or false, a terminal failure before `COMMIT` MUST return the error HTTP status and the native JSON error body defined by SE1 instead of an SSE response. This rule covers local validation failures, route exhaustion (`monoize-upstream-routing.spec.md` RTA-8), and every upstream attempt failure. The downstream body MUST carry the final attempt's upstream status, type, code, param, and sanitized message. It MUST NOT contain the text `All upstream attempts failed`.
+FP4e. Native pre-output errors. Let `COMMIT` be the instant Monoize returns downstream SSE response headers (FP4h). For `POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/messages`, and Gemini inference, with `stream` true or false, a terminal failure before `COMMIT` MUST return the error HTTP status and the native JSON error body defined by SE1 (Gemini: DG5) instead of a stream response. For a Gemini JSON-array stream, `COMMIT` is the instant Monoize returns the `application/json` response headers. This rule covers local validation failures, route exhaustion (`monoize-upstream-routing.spec.md` RTA-8), and every upstream attempt failure. The downstream body MUST carry the final attempt's upstream status, type, code, param, and sanitized message; a Gemini body carries only the DG5 members. It MUST NOT contain the text `All upstream attempts failed`.
 FP4e-1. Monoize-generated `/v1/responses` SSE `event: error` payloads emitted after `COMMIT` MUST use the standard fields `type`, `sequence_number`, `code`, `message`, and `param`. They MUST NOT add an HTTP `status` field. If `AppError.upstream_code` is present, `code` MUST preserve it. Otherwise, `code` MUST be `server_error` when the effective error status is in `500..=599`, and MUST equal `AppError.code` for other statuses. The effective error status is `AppError.upstream_status` when present, otherwise `AppError.status.as_u16()`. The original internal error code and status MUST remain unchanged in request logs. These gateway-generated frames MUST use `sequence_number = 0` when no Responses event precedes them.
 
 FP4f. A terminal failure in FP4e MUST finalize the request log with `status = "error"`, `error_code` equal to the upstream error code when present, `error_http_status` equal to the upstream HTTP status when present, no token usage, and no billing charge. Under RTA-8b the log instead records the downstream values `upstream_error` and `502`; the original status and code stay in `tried_providers`. The same rule applies to a terminal failure after `COMMIT` and before the first output event.
@@ -341,13 +360,13 @@ FP5c. `stream_upstream_to_urp_events` MUST dispatch by `provider_type` to exactl
 
 FP6. **Render downstream response:** Convert `UrpResponseV2` or canonical URP v2 stream events into the downstream endpoint's response shape, streaming or non-streaming.
 
-FP6a. For pass-through streaming on `/v1/responses`, `/v1/chat/completions`, and `/v1/messages`, Monoize MUST implement the downstream adapter as a three-stage pipeline connected by in-memory channels of canonical URP v2 stream events:
+FP6a. For live URP inference streaming, including Gemini, Monoize MUST implement the downstream adapter as a three-stage pipeline connected by in-memory channels of canonical URP v2 stream events:
 
 - stage 1: provider-specific decoder consumes upstream stream data and emits canonical URP v2 stream events;
 - stage 2: response-transform stage consumes canonical URP v2 stream events, applies any matching response-phase transforms incrementally, and emits transformed canonical URP v2 stream events;
-- stage 3: downstream-specific encoder consumes transformed canonical URP v2 stream events and emits downstream SSE frames.
+- stage 3: downstream-specific encoder consumes transformed canonical URP v2 stream events and emits downstream protocol frames. Gemini framing follows DG2.
 
-FP6a-NF. Monoize MUST NOT implement any fast path or raw passthrough that bypasses the three-stage Decoder -> URP -> Encoder pipeline defined in FP6a for any combination of provider type and downstream protocol. All streaming responses MUST flow through stages 1 through 3 of FP6a unconditionally, regardless of whether response-phase transforms are active.
+FP6a-NF. Monoize MUST NOT implement any fast path or raw passthrough for inference output that URP can represent, for any combination of provider type and downstream protocol. Streaming and non-streaming inference MUST use Decoder → URP → Encoder, including when no transforms are active and when both protocols are Gemini.
 
 FP6a-CTRL. A provider-specific decoder MAY emit a canonical provider-control stream event for a protocol control event that is not a model output item and is not terminal state. A provider-control event MUST contain the source protocol name, the downstream event name, and the complete JSON payload for that control event. A downstream encoder MUST emit a provider-control event only when a protocol-specific downstream rule explicitly permits that event name. Otherwise, the downstream encoder MUST ignore the provider-control event. Provider-control events MUST NOT create nodes, change `ResponseDone.output`, or affect billing usage.
 
@@ -783,7 +802,7 @@ RC5. If Monoize generated provider-native reasoning-control fields under RC4, Mo
 
 ### 7.1.4 Decoder and encoder responsibilities
 
-DER1. Downstream decoders for `/v1/responses`, `/v1/chat/completions`, and `/v1/messages` MUST decode into `UrpRequestV2` before any request-phase transform executes.
+DER1. Every URP inference decoder, including Gemini, MUST decode into `UrpRequestV2` before any request-phase transform executes.
 
 DER2. Upstream non-stream decoders MUST decode into `UrpResponseV2` before any response-phase non-stream transform executes.
 
@@ -966,7 +985,7 @@ PR4c.2a. When encoding an upstream `POST /v1/responses` request whose replayed `
 
 PR4c.2b. When encoding a replayed URP v2 `Reasoning` node with non-empty `encrypted` into an upstream `POST /v1/responses` request `input[]` item, Monoize MUST emit the item whether its id is present or absent after reasoning-envelope processing. If `Reasoning.id` or `Reasoning.extra_body.id` contains a non-empty string, Monoize MUST emit that exact value as `id`. Otherwise, Monoize MUST omit `id`. Monoize MUST NOT drop encrypted reasoning solely because its id is absent, and MUST NOT synthesize a new `rs_...` id.
 
-PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, or `/v1/messages` in a Monoize reasoning envelope before the payload is emitted to the downstream client. The wrap step MUST occur before any response-phase transform (provider, global, or API-key) observes the corresponding `Reasoning` node, reasoning `NodeDelta`, reasoning `NodeStart`, reasoning `NodeDone`, or `ResponseDone.output` reasoning entry. After PR4c.3 wrapping, the only encrypted reasoning value visible to response-phase transforms is the `mz2.` envelope string.
+PR4c.3. When an authenticated API key has `reasoning_envelope_enabled = true`, Monoize MUST wrap every downstream-visible encrypted reasoning payload produced by `/v1/responses`, `/v1/chat/completions`, `/v1/messages`, or Gemini inference in a Monoize reasoning envelope before the payload is emitted to the downstream client. The wrap step MUST occur before any response-phase transform (provider, global, or API-key) observes the corresponding `Reasoning` node, reasoning `NodeDelta`, reasoning `NodeStart`, reasoning `NodeDone`, or `ResponseDone.output` reasoning entry. After PR4c.3 wrapping, the only encrypted reasoning value visible to response-phase transforms is the `mz2.` envelope string.
 
 PR4c.4. The Monoize reasoning envelope string format MUST be:
 
@@ -1656,7 +1675,7 @@ It MAY buffer atomic tool calls, media, and signed Parts until their complete na
 It MUST buffer out-of-order completions until lower node indices complete or authoritative terminal output supplies those nodes.
 It MUST reconcile terminal-only output without emitting an already emitted Part twice.
 If terminal state retracts or replaces an emitted Part, encoding MUST fail because Gemini cannot retract prior Parts.
-The codec does not add a downstream HTTP endpoint. Request configuration tests MUST cover both streaming modes.
+Gemini downstream HTTP framing follows DG2 and `gemini-codec.spec.md` GEM-9a. Request configuration tests MUST cover both streaming modes.
 Audio MIME types map to Audio nodes. File MIME types map to MediaMetadata.media_type.
 Citation sources map to Text.citations. Other candidate metadata remains provider-scoped passthrough without duplicate canonical values.
 Built-in tool declarations use typed ToolDefinition.config and origin_protocol. Function schemas use FunctionDefinition.parameters.
@@ -1761,7 +1780,7 @@ XF6a. Default whitelists per provider type:
 - `chat_completion`: `audio`, `frequency_penalty`, `function_call`, `functions`, `logit_bias`, `logprobs`, `top_logprobs`, `max_completion_tokens`, `max_tokens`, `metadata`, `moderation`, `n`, `presence_penalty`, `prompt_cache_options`, `safety_identifier`, `seed`, `service_tier`, `stop`, `stream_options`, `store`, `web_search_options`, `parallel_tool_calls`, `debug`, `image_config`, `modalities`, `cache_control`, `top_k`, `top_a`, `min_p`, `repetition_penalty`, `prediction`, `prompt_cache_key`, `prompt_cache_retention`, `route`, `structured_outputs`, `verbosity`, `provider`, `plugins`, `session_id`, `stop_server_tools_when`, `trace`, `thinking`, `include_reasoning`, `user_id`, `providerOptions` (emitted only for the `vercel` dialect, PC0b).
 - `responses`: `access_programs`, `background`, `context_management`, `conversation`, `include`, `instructions`, `metadata`, `max_tool_calls`, `moderation`, `parallel_tool_calls`, `previous_response_id`, `prompt`, `prompt_cache_key`, `prompt_cache_options`, `prompt_cache_retention`, `safety_identifier`, `service_tier`, `store`, `stream_options`, `text`, `top_logprobs`, `truncation`.
 - `messages`: `cache_control`, `container`, `context_management`, `diagnostics`, `inference_geo`, `max_tokens`, `mcp_servers`, `metadata`, `output_config`, `service_tier`, `speed`, `stop_sequences`, `top_k`. This list covers every top-level body member documented by the Anthropic Messages API reference and the beta context-management and MCP-connector pages (checked 2026-10-31) that URP does not type.
-- `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`, `continuationToken`, `serviceTier`, `service_tier` (the Gemini encoder maps `service_tier` under PG4j and never emits it).
+- `gemini`: `generationConfig`, `safetySettings`, `cachedContent`, `labels`, `continuationToken`, `serviceTier`, `service_tier`, `store`, `toolConfig` (the Gemini encoder maps `service_tier` under PG4j and never emits it).
 
 XF6b. Each dashboard-managed provider MAY carry an optional `extra_fields_whitelist` override, JSON array of strings stored in the `monoize_providers` table. When present, the effective whitelist is the union of the default whitelist and the override list. When absent, only the default whitelist applies.
 
@@ -1774,6 +1793,8 @@ XF6e. Whitelist filtering MUST occur after request-phase transforms and before u
 XF6f. The default whitelists MUST exclude Chat Completions `models` and Messages `fallbacks`. An administrator MAY add either field through a provider `extra_fields_whitelist` override under XF6b.
 
 XF6g. The default `messages` whitelist entries `context_management`, `diagnostics`, `mcp_servers`, and `speed` apply only when the downstream endpoint is `/v1/messages`. For another downstream protocol the default filter MUST drop them, because another family can carry the same name with an incompatible shape (for example Responses `context_management`). An explicit provider override under XF6b or XF6c still admits them.
+
+XF6h. The default `gemini` entries `store` and `toolConfig` apply only for a Gemini downstream. For another downstream the default filter MUST drop them: Chat Completions `store` keeps a completion and does not set Gemini request logging, and only the Gemini decoder reduces `toolConfig` to members without typed URP owners. An explicit override under XF6b or XF6c still admits them.
 
 ### 7.7 Downstream adapter: `POST /v1/chat/completions`
 
@@ -1957,17 +1978,17 @@ DM11. For downstream `POST /v1/messages`, flat canonical storage MUST NOT weaken
 - `thinking_delta` precedes `signature_delta` for one thinking block;
 - cumulative usage semantics remain explicit and testable.
 
-### 7.8.1 Downstream endpoint: `POST /v1/messages/count_tokens`
+### 7.8.1 Downstream token counting
 
-DMC1. Monoize MUST accept `POST /v1/messages/count_tokens` and its `/api` alias with the same API-key authentication, IP checks, model redirects, and model allow-list checks as `POST /v1/messages`. The body MUST be a JSON object with a non-empty string `model`; otherwise Monoize MUST return HTTP 400 with a Messages error body of type `invalid_request_error`.
+DMC1. Messages and Gemini token counting MUST use the corresponding inference endpoint's API-key authentication, IP checks, model redirects, model allow-list, and multiplier rules. Decode the request with the corresponding request decoder into `UrpRequestV2` in non-streaming mode. Messages requires a non-empty string body `model`. Gemini decodes the member `generateContentRequest` (or `generate_content_request`) when present, and otherwise the whole body when its `contents` member is an array. The DG1 path model replaces any decoded model. A Gemini count request with neither shape MUST return HTTP 400.
 
-DMC2. Monoize MUST build the same ordered Provider and Channel attempt list that `POST /v1/messages` would use for that logical model, then keep only attempts whose provider type is `messages`. If no such attempt exists, Monoize MUST return HTTP 404 with body `{"type":"error","error":{"type":"not_found_error","message":<text>},"request_id":<id>}`. Claude Code treats this as an unsupported optional endpoint and falls back to local estimation.
+DMC2. Use inference routing order and keep only attempts whose effective API type is `messages` or `gemini`. If none exists, return HTTP 404: for Messages, the SE1 body with `error.type` `not_found_error`, which Claude Code treats as an unsupported optional endpoint; for Gemini, the DG5 body with `status` `NOT_FOUND`.
 
-DMC3. For each kept attempt in order, Monoize MUST send `POST /v1/messages/count_tokens` to the Channel base URL with the downstream body, replacing only `model` with the attempt's upstream model. Headers follow PM8, PM8e, PM8h, and the Channel static headers. Monoize MUST NOT apply request transforms, the extra-field whitelist, or URP decoding to this body.
+DMC3. Encode the canonical request with the corresponding upstream request encoder and the attempt's upstream model. For a `messages` attempt, send `POST /v1/messages/count_tokens` with only the following encoded fields when present: `model`, `messages`, `system`, `tools`, `tool_choice`, `thinking`, `output_config`, `cache_control`, `speed`, `context_management`, and `mcp_servers`. For a `gemini` attempt, send `POST` to the normal Gemini model URL with action `countTokens`. Its only top-level member MUST be `generateContentRequest`. Include `model` set to `models/<upstream model>`, and the encoded `contents`, `tools`, `toolConfig`, `safetySettings`, `systemInstruction`, `generationConfig`, `cachedContent`, `serviceTier`, `continuationToken`, `labels`, and `store` when present. Neither count request carries an inference `stream` control. Use the normal attempt authentication and protocol headers, including PM8 and PM8h. Do not run request or response transforms.
 
-DMC4. On the first upstream HTTP 2xx response, Monoize MUST return HTTP 200 with the upstream JSON body unchanged. On a non-2xx upstream response or transport failure, Monoize MUST try the next kept attempt. After the last attempt fails, Monoize MUST return the last upstream HTTP status (HTTP 502 for a transport failure) with a Messages error body whose `error.type` is the upstream Anthropic error type when available and `api_error` otherwise, and whose `error.message` is the upstream message after `upstream-error-sanitization.spec.md` processing.
+DMC4. A successful count MUST include a non-negative integer: `input_tokens` from a `messages` attempt or `totalTokens` from a `gemini` attempt. Encode that count as `input_tokens` for Messages clients and `totalTokens` for Gemini clients. Gemini clients also receive `cachedContentTokenCount`, `promptTokensDetails`, and `cacheTokensDetails` when a `gemini` attempt supplies them. Non-2xx, transport, and invalid count responses MUST try the next eligible attempt. On exhaustion return the last failure's status and sanitized message in the downstream error envelope; transport and invalid count responses use HTTP 502.
 
-DMC5. Token counting is free. Monoize MUST NOT charge, run the balance guard, write a request log, or update passive Channel health or circuit-breaker state for this endpoint.
+DMC5. Token counting is free. Monoize MUST NOT charge, run the balance guard, write a request log, or update passive Channel health or circuit-breaker state for either counting endpoint.
 
 ### 7.9 Downstream endpoint: `POST /v1/embeddings`
 
@@ -2102,7 +2123,7 @@ STR3b. For downstream `POST /v1/responses` SSE, Monoize MUST emit the canonical 
 
 STR3c. Downstream `POST /v1/responses` SSE streams MUST NOT emit a `data: [DONE]` frame. The stream ends by closing the connection after the terminal JSON event: `response.completed`, `response.incomplete`, `response.failed`, `response.cancelled`, or `error`.
 
-STR3c.1. For downstream streaming responses emitted by `POST /v1/responses` or `POST /v1/chat/completions`, Monoize MUST configure an SSE heartbeat with an interval of 15 seconds. Each heartbeat MUST be an SSE comment frame whose comment text is `heartbeat`. A heartbeat MUST NOT contain a `data:` line, MUST NOT contain an `event:` line, MUST NOT increment Responses `sequence_number`, and MUST NOT count as a Chat Completions `[DONE]` sentinel. The heartbeat exists only to keep downstream HTTP intermediaries from treating an otherwise-valid idle stream as inactive after Monoize has started the downstream SSE response. For `POST /v1/messages`, downstream keep-alive is specified by DM7b instead of this comment-frame heartbeat.
+STR3c.1. For downstream streaming responses emitted by `POST /v1/responses` or `POST /v1/chat/completions`, Monoize MUST configure an SSE heartbeat with an interval of 15 seconds. Each heartbeat MUST be an SSE comment frame whose comment text is `heartbeat`. A heartbeat MUST NOT contain a `data:` line, MUST NOT contain an `event:` line, MUST NOT increment Responses `sequence_number`, and MUST NOT count as a Chat Completions `[DONE]` sentinel. The heartbeat exists only to keep downstream HTTP intermediaries from treating an otherwise-valid idle stream as inactive after Monoize has started the downstream SSE response. For `POST /v1/messages`, downstream keep-alive is specified by DM7b instead of this comment-frame heartbeat. Gemini streams MUST NOT emit a heartbeat (`gemini-codec.spec.md` GEM-9a).
 
 STR3d. For downstream `POST /v1/responses` reasoning streams, Monoize MUST preserve the distinction between reasoning summary text and raw reasoning text. Reasoning summary lifecycle events MUST use the OpenAI names `response.reasoning_summary_part.added`, `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, and `response.reasoning_summary_part.done`. Raw reasoning text lifecycle events MUST use the OpenAI names `response.reasoning_text.delta` and `response.reasoning_text.done`. Monoize MUST NOT emit the legacy custom event family `response.reasoning.delta` or `response.reasoning.done`.
 
@@ -2205,7 +2226,7 @@ SE1b. Every error body and every gateway-generated SSE `error` event on `POST /v
 
 SE1c. Messages `error.type` MUST be one of `invalid_request_error`, `authentication_error`, `billing_error`, `permission_error`, `not_found_error`, `conflict_error`, `request_too_large`, `rate_limit_error`, `api_error`, `timeout_error`, `overloaded_error`. This set follows the official Claude API error reference and MUST be revised when that reference changes. If the upstream type belongs to this set, Monoize MUST use it. Otherwise Monoize MUST use a non-default local `AppError.error_type` that belongs to this set. Otherwise the type is derived from the error HTTP status: 400 → `invalid_request_error`, 401 → `authentication_error`, 402 → `billing_error`, 403 → `permission_error`, 404 → `not_found_error`, 409 → `conflict_error`, 413 → `request_too_large`, 429 → `rate_limit_error`, 504 → `timeout_error`, 529 → `overloaded_error`, other `4xx` → `invalid_request_error`, other statuses → `api_error`. The same rule applies to gateway-generated in-stream Messages `error` events.
 
-SE1d. Forwarded rate-limit headers. Let `FWD(headers)` be the upstream response headers whose lowercased name is `retry-after`, `retry-after-ms`, `x-should-retry`, or starts with `anthropic-ratelimit-` or `x-ratelimit-`. When the upstream provider type belongs to the downstream protocol family (`responses`→`/v1/responses`, `chat_completion`→`/v1/chat/completions`, `messages`→`/v1/messages`), Monoize MUST copy these headers onto the downstream response:
+SE1d. Forwarded rate-limit headers. Let `FWD(headers)` be the upstream response headers whose lowercased name is `retry-after`, `retry-after-ms`, `x-should-retry`, or starts with `anthropic-ratelimit-` or `x-ratelimit-`. On same-family inference routes, including Gemini → Gemini, Monoize MUST copy these headers onto the downstream response:
 - on a pre-commit error: `FWD` of the final failed attempt's upstream response, including a `2xx` response whose body cannot be read or decoded;
 - on a non-streaming success: `FWD` of the serving attempt's upstream response;
 - on a streaming success: `FWD` of the attempt that caused `COMMIT`. A later pre-output retry MUST NOT change committed headers.
@@ -2215,16 +2236,18 @@ SE1e. A request body that is not valid JSON, or that is rejected before decoding
 
 ### 9.2 Mid-stream errors
 
-SE2. If an error occurs after `COMMIT`, for example upstream disconnects, parse failure, or exhaustion of pre-output retries, Monoize MUST emit a protocol-appropriate error event, then:
+SE2. If an error occurs after `COMMIT`, for example upstream disconnects, parse failure, or exhaustion of pre-output retries, Monoize MUST emit a protocol-appropriate stream error, then:
 
 - for downstream `POST /v1/chat/completions`, emit exactly one terminal `data: [DONE]` sentinel and close the stream. The event data is `{ "error": { "message", "type", "param", "code" } }` with exactly these members;
 - for downstream `POST /v1/responses` and `POST /v1/messages`, close the stream without appending `data: [DONE]`.
+- for downstream Gemini, emit the DG5 error shape as the last SSE event or array element and close the stream as defined in `gemini-codec.spec.md` GEM-9a.
 
 SE2a. Every error rendered from a stream event or a failed response outcome MUST be normalized to the native envelope of the downstream protocol, on same-family and cross-family routes, before the first response transform:
 
 - `/v1/messages`: `{ "type": "error", "error": { "type", "message" }, "request_id" }`, with `type` from SE1c and the canonical request id from SE1b.
 - `/v1/chat/completions`: `{ "error": { "message", "type", "param", "code" } }`. `type` is the upstream type, otherwise the RTA-8 status mapping; `code` is the upstream code, otherwise `upstream_error`; `param` is a string or `null`.
 - `/v1/responses`: the event fields `code`, `message`, and `param` when a string `param` exists. `code` is the upstream code, otherwise `upstream_error`.
+- Gemini: the numeric HTTP status used by DG5 and the sanitized message. Use the upstream numeric status when available. Without a numeric status, map the Google canonical code with the DG5 name mapping. Apply the RTA-8b credential-error mapping before encoding.
 
 The normalized form MUST NOT contain any other member. Raw upstream frames, `raw_data`, `event_name`, provider metadata, URLs, and `status` remain internal. `code`, `type`, `param`, and `message` pass through `MASK` (SAN-11). When the error status is `401`, `403`, or `407`, or its code or type is `authentication_error`, `invalid_api_key`, `permission_error`, or `permission_denied`, the rendered `type` is `server_error` (Messages: `api_error`) and the rendered `code` is `upstream_error` (Responses: `server_error`). Without a status, the status for these derivations is `429` for a rate-limit code or type, `500` for `server_error`, `api_error`, or `overloaded_error`, and otherwise `502`. Request logs and capture dumps keep the unnormalized detail.
 

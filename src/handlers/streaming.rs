@@ -146,13 +146,18 @@ fn precommitted_error_stream(
     receiver_event_stream(rx)
 }
 
+pub(super) enum StreamFraming {
+    Sse(&'static [u8]),
+    GeminiJsonArray,
+}
+
 /// FP4e/FP4h: runs `forwarding` in its own task and answers once the first
 /// upstream attempt is accepted or the request has failed. A failure before
 /// the commit becomes a native JSON error; after it, an in-stream error.
 pub(super) async fn commit_forward_event_stream<F, S>(
     downstream: DownstreamProtocol,
     request_id: Option<String>,
-    keep_alive: &'static [u8],
+    framing: StreamFraming,
     forwarding: impl FnOnce(StreamCommit) -> F,
 ) -> AppResult<Response>
 where
@@ -205,7 +210,10 @@ where
         let _lifetime = &lifetime;
         event
     });
-    let mut response = crate::payload::sse::response(body, keep_alive);
+    let mut response = match framing {
+        StreamFraming::Sse(keep_alive) => crate::payload::sse::response(body, keep_alive),
+        StreamFraming::GeminiJsonArray => crate::payload::sse::json_array_response(body),
+    };
     crate::error::append_forwarded_headers(&mut response, forwarded_headers);
     Ok(response)
 }

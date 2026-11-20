@@ -5,7 +5,7 @@ description: 用 Rust 编写的 AI API 网关：转换协议语义，将一个�
 
 ## 概述
 
-Monoize 是用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Embeddings 和图像格式的请求。它将请求转发到配置的上游 Channel，并按客户端使用的协议返回响应。
+Monoize 是用 Rust 编写的 AI API 网关。它接受 OpenAI Responses、OpenAI Chat Completions、Anthropic Messages、Gemini GenerateContent、Embeddings 和图像请求。它将请求转发到配置的上游 Channel，并按客户端使用的协议返回响应。
 
 Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求解码为统一的类型化内部表示，再编码为选定的上游协议。响应沿同一路径反向转换。文本、推理、加密推理、工具调用、工具结果、图像、用量和流边界在转换中保持原有角色。
 
@@ -26,14 +26,18 @@ Monoize 转换协议语义，而不是替换 JSON 字段名。它将每个请求
 | `POST` | `/v1/responses/compact` | Responses 压缩 |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
-| `POST` | `/v1/messages/count_tokens` | Anthropic Token 统计，仅限 `messages` Channel |
+| `POST` | `/v1/messages/count_tokens` | 通过 `messages` 或 `gemini` 统计 Messages Token |
+| `POST` | `/v1beta/models/{model}:generateContent` | Gemini JSON 响应 |
+| `POST` | `/v1beta/models/{model}:streamGenerateContent` | Gemini 流式 JSON 数组，或用 `?alt=sse` 获取 SSE |
+| `POST` | `/v1beta/models/{model}:countTokens` | 通过 `messages` 或 `gemini` 统计 Gemini Token |
+| `GET` | `/v1beta/models` 和 `/v1beta/models/{model}` | Gemini 模型列表和详情 |
 | `POST` | `/v1/embeddings` | Embeddings |
 | `POST` | `/v1/images/generations` | 图像生成 |
 | `POST` | `/v1/images/edits` | Multipart 图像编辑 |
 | `POST` | `/v1/systemone` | System One 决策 |
 | `POST` | `/v1/decisions` | OpenAI Decisions |
 
-每个转发端点都另有 `/api/v1/...` 别名。
+在转发路径前添加 `/api` 即可使用别名。三个 Gemini POST 端点都支持 `/v1beta` 和 `/v1`。Gemini 模型查询使用 `/v1beta`。
 
 ## 上游 Channel 类型
 

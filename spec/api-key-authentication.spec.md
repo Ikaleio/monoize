@@ -7,15 +7,18 @@
 
 ## 1. Token extraction
 
-AK1. Monoize MUST extract the forwarding API key token from one of these HTTP headers:
+AK1. Monoize MUST extract the forwarding API key token from these sources in order:
 
 - `Authorization: Bearer <token>`
 - `x-api-key: <token>`
+- On the Gemini endpoints in `unified_responses_proxy.spec.md` §2.2.2 only, a non-empty `x-goog-api-key: <token>`, and then the value of the first form-decoded query pair named `key`.
 
-AK2. If neither header is present, or if `Authorization` is present but does not use the `Bearer ` prefix, Monoize MUST return:
+AK2. If no applicable credential is present, or if `Authorization` is present but does not use the `Bearer ` prefix, Monoize MUST return:
 
 - HTTP `401`
-- error code `unauthorized`
+- error code `unauthorized`, except on Gemini endpoints, where the body follows `unified_responses_proxy.spec.md` DG5 with `status` `UNAUTHENTICATED`
+
+AK2a. Let `P` be the request path after removing at most one leading `/api`. When `P` equals `/v1beta/models` or starts with `/v1beta/models/` or `/v1/models/`, for every HTTP method, Monoize MUST remove every query pair whose percent-decoded name is `key` before the tracing layer and every handler read the URI. The remaining pairs MUST keep their order and bytes. The removed value MUST NOT appear in tracing spans, request logs, capture dumps, error messages, or upstream requests.
 
 ## 2. Token resolution sources
 

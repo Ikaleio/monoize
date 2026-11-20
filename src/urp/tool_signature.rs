@@ -1103,6 +1103,19 @@ mod tests {
                 )
                 .unwrap()
             }
+            DownstreamProtocol::Gemini => {
+                let wire = urp::encode::gemini::encode_response(response, "client-model");
+                let mut contents = vec![wire["candidates"][0]["content"].clone()];
+                if tool_result {
+                    contents.push(json!({"role":"user","parts":[{"functionResponse":{
+                        "id":"native-1","name":"click","response":{"result":"clicked"}
+                    }}]}));
+                }
+                urp::decode::gemini::decode_request(
+                    &json!({"model":"client-model","contents":contents}),
+                )
+                .unwrap()
+            }
         }
     }
 

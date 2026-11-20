@@ -7,6 +7,7 @@ use std::collections::HashMap;
 pub struct RequestContext {
     pub username: Option<String>,
     pub api_key_id: Option<String>,
+    pub downstream_model: Option<String>,
     pub response_history: Option<ResponseHistoryContext>,
     pub tool_transports: HashMap<String, ToolTransport>,
     /// True when a Monoize rule inserted top-level `cache_control` in this attempt. Typed markers

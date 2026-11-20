@@ -5,6 +5,7 @@ pub(crate) mod channel_probe;
 mod compact;
 mod count_tokens;
 mod decisions;
+pub(crate) mod gemini;
 pub(crate) mod helpers;
 pub(crate) mod image_api;
 mod json_forward;
@@ -192,16 +193,7 @@ fn codex_model_descriptor(model_id: &str, priority: usize) -> Value {
 
 pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     let auth = auth_tenant(&headers, &state).await?;
-    let mut model_ids = state
-        .monoize_store
-        .list_available_model_names()
-        .await
-        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e))?;
-
-    if auth.model_limits_enabled && !auth.model_limits.is_empty() {
-        let allowed: HashSet<&str> = auth.model_limits.iter().map(|s| s.as_str()).collect();
-        model_ids.retain(|id| allowed.contains(id.as_str()));
-    }
+    let model_ids = visible_model_ids(&state, &auth).await?;
 
     let codex_model_ids = state.monoize_runtime.read().await.codex_model_ids.clone();
     let visible_model_ids: HashSet<&str> = model_ids.iter().map(String::as_str).collect();
@@ -232,6 +224,22 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> A
     .into_response())
 }
 
+async fn visible_model_ids(
+    state: &AppState,
+    auth: &crate::auth::AuthResult,
+) -> AppResult<Vec<String>> {
+    let mut model_ids = state
+        .monoize_store
+        .list_available_model_names()
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, "provider_store_error", e))?;
+    if auth.model_limits_enabled && !auth.model_limits.is_empty() {
+        let allowed: HashSet<&str> = auth.model_limits.iter().map(String::as_str).collect();
+        model_ids.retain(|id| allowed.contains(id.as_str()));
+    }
+    Ok(model_ids)
+}
+
 /// SE1e: the body-limit layer rejects an oversized `Content-Length` before any
 /// handler runs, so its plain-text 413 is rendered natively here. Runs inside
 /// the request-id layers, which supply the canonical id.
@@ -240,9 +248,11 @@ pub(crate) async fn native_body_limit_middleware(
     next: axum::middleware::Next,
 ) -> Response {
     let path = request.uri().path();
-    let messages = match path.strip_prefix("/api").unwrap_or(path) {
-        "/v1/responses" | "/v1/chat/completions" => false,
-        "/v1/messages" => true,
+    let protocol = match path.strip_prefix("/api").unwrap_or(path) {
+        "/v1/responses" | "/v1/codex/responses" => DownstreamProtocol::Responses,
+        "/v1/chat/completions" => DownstreamProtocol::ChatCompletions,
+        "/v1/messages" | "/v1/messages/count_tokens" => DownstreamProtocol::AnthropicMessages,
+        _ if gemini::is_gemini_request(request.method(), path) => DownstreamProtocol::Gemini,
         _ => return next.run(request).await,
     };
     let request_id = request.headers().get("x-request-id").cloned();
@@ -261,8 +271,12 @@ pub(crate) async fn native_body_limit_middleware(
         "request_too_large",
         "request body exceeds the configured size limit",
     );
-    if !messages {
-        return err.into_response();
+    match protocol {
+        DownstreamProtocol::Gemini => return gemini::error_response(err),
+        DownstreamProtocol::Responses | DownstreamProtocol::ChatCompletions => {
+            return err.into_response();
+        }
+        DownstreamProtocol::AnthropicMessages => {}
     }
     let request_id = request_id
         .as_ref()
@@ -351,7 +365,7 @@ async fn create_response_inner(
         return commit_forward_event_stream(
             downstream,
             request_id.clone(),
-            api_stream_keep_alive(),
+            StreamFraming::Sse(api_stream_keep_alive()),
             |commit| {
                 forward_stream_typed(
                     StreamForwardRequest {
@@ -441,7 +455,7 @@ pub(crate) async fn create_chat_completions(
         return commit_forward_event_stream(
             downstream,
             request_id.clone(),
-            api_stream_keep_alive(),
+            StreamFraming::Sse(api_stream_keep_alive()),
             |commit| {
                 forward_stream_typed(
                     StreamForwardRequest {
@@ -571,7 +585,7 @@ async fn create_messages_inner(
         return commit_forward_event_stream(
             downstream,
             request_id.clone(),
-            messages_stream_keep_alive(),
+            StreamFraming::Sse(messages_stream_keep_alive()),
             |commit| {
                 forward_stream_typed(
                     StreamForwardRequest {
@@ -991,6 +1005,7 @@ pub(crate) enum DownstreamProtocol {
     Responses,
     ChatCompletions,
     AnthropicMessages,
+    Gemini,
 }
 
 impl DownstreamProtocol {
@@ -1000,6 +1015,7 @@ impl DownstreamProtocol {
             (Self::Responses, ProviderType::Responses)
                 | (Self::ChatCompletions, ProviderType::ChatCompletion)
                 | (Self::AnthropicMessages, ProviderType::Messages)
+                | (Self::Gemini, ProviderType::Gemini)
         )
     }
 }
@@ -1044,6 +1060,7 @@ pub(super) fn foreign_response_target(
         DownstreamProtocol::Responses => urp::ProviderProtocol::Responses,
         DownstreamProtocol::ChatCompletions => urp::ProviderProtocol::ChatCompletion,
         DownstreamProtocol::AnthropicMessages => urp::ProviderProtocol::Messages,
+        DownstreamProtocol::Gemini => urp::ProviderProtocol::Gemini,
     })
 }
 
@@ -1137,6 +1154,16 @@ pub(crate) struct StreamRuntimeMetrics {
 }
 
 async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::auth::AuthResult> {
+    auth_tenant_with_gemini_key(headers, state, None).await
+}
+
+/// AK1: `gemini_key` is the Gemini-endpoint credential, from `x-goog-api-key` or the `key`
+/// query pair, tried after `Authorization` and `x-api-key`.
+async fn auth_tenant_with_gemini_key(
+    headers: &HeaderMap,
+    state: &AppState,
+    gemini_key: Option<&str>,
+) -> AppResult<crate::auth::AuthResult> {
     let token = if let Some(auth_header) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -1148,6 +1175,7 @@ async fn auth_tenant(headers: &HeaderMap, state: &AppState) -> AppResult<crate::
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
+        .or(gemini_key)
     {
         api_key
     } else if headers

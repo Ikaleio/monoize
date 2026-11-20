@@ -64,7 +64,7 @@ DR-R1. Routing MUST use the same Provider and Channel model-map matching rules, 
 
 DR-R2. For a decision endpoint, a Channel is a candidate only when its effective API type is a decision API type. Monoize MUST apply this filter before it applies the Provider attempt limit (`max_retries`).
 
-DR-R3. For every non-decision forwarding endpoint (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/images/generations`, `/v1/images/edits`, and their aliases), a Channel is a candidate only when its effective API type is not a decision API type. Monoize MUST apply this filter before it applies the Provider attempt limit.
+DR-R3. For every non-decision forwarding endpoint (`/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`, Gemini inference and counting, `/v1/embeddings`, `/v1/images/generations`, `/v1/images/edits`, and their aliases), a Channel is a candidate only when its effective API type is not a decision API type. Monoize MUST apply this filter before it applies the Provider attempt limit.
 
 DR-R4. Both decision endpoints MUST accept attempts of both decision API types.
 

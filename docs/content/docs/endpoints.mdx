@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 Every endpoint below also exists under the `/api` prefix, for example `/api/v1/chat/completions`. Use the alias when a client hardcodes `/api` paths.
 
-Any endpoint can reach any upstream type. For example, a client can call `/v1/messages` while the route serves the model through a `chat_completion` Channel. Monoize converts the protocol in both directions. Decision Channels are the exception: see [Decisions](#decisions).
+Monoize converts inference requests and responses between supported protocols. For example, a client can call `/v1/messages` and reach a `chat_completion` Channel. Token counting and decisions have separate Channel requirements.
 
 Monoize preserves OpenRouter `configuration_update` messages on Chat routes, including updates with empty content. File data URIs retain their MIME type during conversion to Messages documents. Messages streams retain `citations_delta` citations. Responses content-filter termination remains an incomplete response rather than a length limit.
 
@@ -272,15 +272,25 @@ Every `/v1/messages` and `/v1/messages/count_tokens` response carries a `request
 
 `POST /v1/messages/count_tokens` uses the same authentication, redirects, and model limits as `/v1/messages`.
 
-- Monoize tries only `messages` Channels in route order. It forwards the body with only `model` replaced.
+- Monoize converts count requests for `messages` and `gemini` Channels in route order. It returns `input_tokens` to Messages clients.
 - If no such Channel exists, it returns `404 not_found_error`. Claude Code then falls back to a local estimate.
 - This endpoint charges nothing, writes no request log, and does not change Channel health.
 
-## Gemini upstreams
+## Gemini GenerateContent
 
-Set the Channel upstream type to `gemini` to use Gemini through the existing endpoints. This support adds no public Gemini HTTP endpoint or Live API.
+Use `/v1beta/models/{model}:generateContent` for one JSON response. Use `:streamGenerateContent` for a streamed JSON array, or add `?alt=sse` to receive SSE. Use `:countTokens` with `contents` or a nested `generateContentRequest`. All three POST routes also accept `/v1` in place of `/v1beta`. The path sets the model. The action sets the stream mode.
 
-Monoize converts `generateContent` requests, responses, and conversation history in both directions. Streaming uses `streamGenerateContent` SSE.
+Authenticate with `x-goog-api-key` or the `key` query parameter. The headers above also work. Monoize removes the `key` query parameter before logging, capture, and forwarding.
+
+Use `GET /v1beta/models` to list visible models in Gemini format. Use `GET /v1beta/models/{model}` to get one model. `GET /v1/models` keeps the OpenAI format.
+
+Token counting uses only `messages` and `gemini` Channels. It returns `totalTokens` and the cache or modality counts that Gemini supplies. It does not charge or write request logs.
+
+Gemini errors use `{"error":{"code":404,"message":"model not found","status":"NOT_FOUND"}}`. SSE has no `[DONE]` marker. Gemini streams send no heartbeat, because Gemini SDK parsers reject SSE comments. Set proxy idle timeouts longer than the slowest expected generation.
+
+### Gemini upstream Channels
+
+Set the Channel type to `gemini` to route supported inference requests to a Gemini upstream. Monoize converts conversation history in both directions. Upstream streaming uses `streamGenerateContent` SSE. The Live API is not supported.
 
 - Text, reasoning, function calls, function results, and supported media retain their order and identity.
 - Other protocols carry thought signatures on text and media as opaque reasoning values. Replay these values unchanged to restore each signature to its Part.
@@ -538,6 +548,7 @@ Monoize sends SSE headers after an upstream attempt is accepted. A later failure
 - `/v1/responses` sends a flat `error` event with `code`, `message`, and `param`, and no `[DONE]`.
 - An upstream `response.failed` stays `response.failed`, with partial output and usage.
 - `/v1/messages` sends an `error` event with `request_id`, and no `[DONE]`.
+- Gemini streams send the Gemini error object as the last SSE event or JSON array element.
 
 ### Rate-limit headers
 

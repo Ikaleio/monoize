@@ -6,7 +6,7 @@
 
 **AI APIs look alike. Their contracts differ.**
 
-Monoize is a Rust gateway for AI APIs. It converts semantics between OpenAI Responses, Chat Completions, and Anthropic Messages. It routes one logical model across multiple upstream Channels. It serves the management dashboard from the same process.
+Monoize is a Rust gateway for AI APIs. It converts between OpenAI Responses, Chat Completions, Anthropic Messages, and Gemini GenerateContent. It routes one logical model across multiple upstream Channels. It serves the management dashboard from the same process.
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -61,7 +61,7 @@ Some response transforms rebuild the full response and use a buffered synthetic 
 
 ## Capabilities
 
-**Protocol conversion.** Streaming and non-streaming conversion among Responses, Chat Completions, and Messages. Gemini, OpenAI image APIs, and Replicate connect as upstreams.
+**Protocol conversion.** Convert streaming and non-streaming requests between Responses, Chat Completions, Messages, and Gemini. OpenAI image APIs and Replicate also connect as upstreams.
 
 **Routing.** Ordered Provider fallback, weighted Channels, circuit breakers with probe or timed recovery, Channel affinity, and per-API-key model redirects.
 
@@ -88,7 +88,7 @@ Some response transforms rebuild the full response and use a buffered synthetic 
 ## Request path
 
 ```text
-Client protocol (Responses / Chat Completions / Messages)
+Client protocol (Responses / Chat Completions / Messages / Gemini)
     │
     ▼
 Decode to URP v2
@@ -200,13 +200,18 @@ curl http://localhost:8080/v1/chat/completions \
 | `POST` | `/v1/responses/compact` | Responses compaction |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions |
 | `POST` | `/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/messages/count_tokens` | Messages token count via `messages` or `gemini` |
+| `POST` | `/v1beta/models/{model}:generateContent` | Gemini JSON response |
+| `POST` | `/v1beta/models/{model}:streamGenerateContent` | Gemini JSON array or SSE with `?alt=sse` |
+| `POST` | `/v1beta/models/{model}:countTokens` | Gemini token count via `messages` or `gemini` |
+| `GET` | `/v1beta/models` and `/v1beta/models/{model}` | Gemini model list and details |
 | `POST` | `/v1/embeddings` | Embeddings |
 | `POST` | `/v1/systemone` | System One decisions |
 | `POST` | `/v1/decisions` | OpenAI Decisions |
 | `POST` | `/v1/images/generations` | Image generation |
 | `POST` | `/v1/images/edits` | Image edits with multipart uploads or JSON references |
 
-Every forwarding endpoint also has an `/api/v1/...` alias.
+Add `/api` before any forwarding path to use its alias. The three Gemini POST endpoints accept both `/v1beta` and `/v1`. Gemini model discovery uses `/v1beta`.
 
 ### Upstream Channel types
 
@@ -230,7 +235,7 @@ Runtime bootstrap uses environment variables. The database stores Providers, Cha
 | `MONOIZE_LISTEN` | `0.0.0.0:8080` | HTTP listen address |
 | `MONOIZE_DATABASE_DSN` | `sqlite://./data/monoize.db` | SQLite or PostgreSQL DSN |
 | `MONOIZE_METRICS_PATH` | `/metrics` | Prometheus metrics path |
-| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP request-body limit in bytes. Responses, Chat Completions, Messages, and Images POST routes default to `10737418240`. |
+| `MONOIZE_HTTP_BODY_MAX_BYTES` | `52428800` | HTTP request-body limit in bytes. Responses inference, Chat Completions, Messages, Gemini, and Images POST routes default to `10737418240`. |
 | `MONOIZE_TRUSTED_PROXY_CIDRS` | `127.0.0.0/8,::1/128` | Trusted reverse-proxy networks; an explicitly empty value disables trust |
 | `MONOIZE_UPSTREAM_PROXY_URL` | unset | Node-local outbound HTTP(S) proxy; Channels may override via `proxy_url` |
 | `MONOIZE_CAP_API_ENDPOINT` | unset | External Cap site endpoint; unset uses the built-in Cap service |

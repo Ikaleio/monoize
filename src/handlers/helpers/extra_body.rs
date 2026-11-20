@@ -104,6 +104,8 @@ const EXTRA_WHITELIST_GEMINI: &[&str] = &[
     "labels",
     "continuationToken",
     "serviceTier",
+    "store",
+    "toolConfig",
     // Mapped to `serviceTier` by the Gemini encoder.
     "service_tier",
     // Mapped to `labels.safety_identifier` by the Gemini encoder.
@@ -159,11 +161,18 @@ fn default_extra_whitelist(provider_type: ProviderType) -> &'static [&'static st
     }
 }
 
-/// Messages body members that another protocol family may carry under the same name with an
-/// incompatible shape (Responses `context_management`), so they pass the default Messages
-/// whitelist only for a Messages downstream (XF6g).
-const MESSAGES_SAME_FAMILY_EXTRA_FIELDS: &[&str] =
-    &["context_management", "diagnostics", "mcp_servers", "speed"];
+/// Default-whitelist members that pass only for a same-family downstream, because another
+/// protocol family carries the name with another shape or meaning (XF6g, XF6h): Responses
+/// `context_management`, and Chat Completions `store`, which keeps a completion rather than
+/// setting Gemini request logging. Only the Gemini decoder reduces `toolConfig` to the members
+/// that no typed URP field owns.
+fn same_family_extra_fields(provider_type: ProviderType) -> &'static [&'static str] {
+    match provider_type {
+        ProviderType::Messages => &["context_management", "diagnostics", "mcp_servers", "speed"],
+        ProviderType::Gemini => &["store", "toolConfig"],
+        _ => &[],
+    }
+}
 
 /// Filter `req.extra_body` to only contain fields allowed by the upstream
 /// provider type's whitelist, optionally extended by a provider-level override.
@@ -191,12 +200,11 @@ pub(in crate::handlers) fn filter_extra_body_for_provider(
         .map(|v| v.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
+    let same_family_only = same_family_extra_fields(provider_type);
     req.extra_body.retain(|k, _| {
         urp::is_internal_key(k)
             || override_set.contains(k.as_str())
             || (defaults.contains(&k.as_str())
-                && (same_family
-                    || provider_type != ProviderType::Messages
-                    || !MESSAGES_SAME_FAMILY_EXTRA_FIELDS.contains(&k.as_str())))
+                && (same_family || !same_family_only.contains(&k.as_str())))
     });
 }

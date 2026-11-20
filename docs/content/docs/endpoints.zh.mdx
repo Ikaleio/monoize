@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 下列每个端点都有 `/api` 前缀别名，例如 `/api/v1/chat/completions`。当客户端硬编码了 `/api` 路径时使用别名。
 
-任何端点都可以到达任何上游类型。例如，客户端调用 `/v1/messages`，而路由通过 `chat_completion` 类型的 Channel 服务该模型。Monoize 在两个方向上转换协议。决策 Channel 例外，参见下文“决策”一节。
+Monoize 在受支持的协议之间转换推理请求和响应。例如，客户端可通过 `/v1/messages` 调用 `chat_completion` Channel。Token 统计和决策端点有各自的 Channel 要求。
 
 Chat 路由会保留 OpenRouter 的 `configuration_update` 消息，包括空内容更新。文件 data URI 转为 Messages 文档时会保留 MIME 类型。Messages 流会保留 `citations_delta` 引用。Responses 内容过滤终止会保留为未完成状态，不会误报为长度限制。
 
@@ -272,15 +272,25 @@ Monoize 转发显式的 `thinking` 和 `output_config` 控制参数，不做本�
 
 `POST /v1/messages/count_tokens` 的认证、重定向和模型限制与 `/v1/messages` 相同。
 
-- Monoize 按路由顺序只尝试 `messages` Channel，转发请求体时只替换 `model`。
+- Monoize 按路由顺序转换请求，再发往 `messages` 或 `gemini` Channel。Messages 客户端收到 `input_tokens`。
 - 没有这类 Channel 时返回 `404 not_found_error`。Claude Code 随后改用本地估算。
 - 此端点不计费，不写请求日志，也不改变 Channel 健康状态。
 
-## Gemini 上游
+## Gemini GenerateContent
 
-将 Channel 的上游类型设为 `gemini`，即可通过现有端点使用 Gemini。此支持不新增公开的 Gemini HTTP 端点，也不包含 Live API。
+调用 `/v1beta/models/{model}:generateContent` 获取单个 JSON 响应。调用 `:streamGenerateContent` 获取流式 JSON 数组，或添加 `?alt=sse` 获取 SSE。调用 `:countTokens` 时，发送 `contents` 或嵌套的 `generateContentRequest`。三个 POST 端点都支持用 `/v1` 替代 `/v1beta`。路径指定模型，操作名称决定是否流式返回。
 
-Monoize 双向转换 `generateContent` 请求、响应和对话历史。流式响应使用 `streamGenerateContent` SSE。
+使用 `x-goog-api-key` 请求头或 `key` 查询参数认证。也可使用上文的请求头。Monoize 在记录日志、捕获和转发之前移除 `key` 查询参数。
+
+使用 `GET /v1beta/models` 获取可见模型的 Gemini 格式列表。使用 `GET /v1beta/models/{model}` 获取单个模型。`GET /v1/models` 保持 OpenAI 格式。
+
+Token 统计只使用 `messages` 和 `gemini` Channel。响应包含 `totalTokens`，以及 Gemini 上游提供的缓存或模态计数。统计不计费，也不写请求日志。
+
+Gemini 错误格式为 `{"error":{"code":404,"message":"model not found","status":"NOT_FOUND"}}`。SSE 不发送 `[DONE]`。Gemini 流不发送心跳，因为 Gemini SDK 的解析器无法处理 SSE 注释。请将代理的空闲超时设置为长于最慢的预期生成时间。
+
+### Gemini 上游 Channel
+
+将 Channel 类型设为 `gemini`，即可把受支持的推理请求路由到 Gemini 上游。Monoize 双向转换对话历史。上游流式请求使用 `streamGenerateContent` SSE。不支持 Live API。
 
 - 文本、推理、函数调用、函数结果和支持的媒体保留顺序与标识。
 - 其他协议把文本和媒体上的思考签名作为不透明推理值携带。原样重放这些值，即可把每个签名还原到对应 Part。
@@ -538,6 +548,7 @@ Monoize 在上游尝试被接受后发送 SSE 响应头。之后的失败无法�
 - `/v1/responses` 发送扁平的 `error` 事件，包含 `code`、`message` 和 `param`，没有 `[DONE]`。
 - 上游的 `response.failed` 仍为 `response.failed`，保留部分输出和用量。
 - `/v1/messages` 发送带 `request_id` 的 `error` 事件，没有 `[DONE]`。
+- Gemini 流把 Gemini 错误对象作为最后一个 SSE 事件或 JSON 数组元素发送。
 
 ### 限流响应头
 

@@ -30,7 +30,7 @@ URPTF-7. Transform execution MUST remain stateless. A transform MUST NOT resolve
 
 ## 2. Decode and encode requirements for transforms
 
-DEC-1. Downstream requests from `/v1/chat/completions`, `/v1/responses`, and `/v1/messages` MUST decode into `UrpRequestV2` before any request-phase transform executes.
+DEC-1. Downstream requests from `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, and Gemini inference endpoints MUST decode into `UrpRequestV2` before any request-phase transform executes.
 
 DEC-2. Downstream responses and upstream responses MUST decode into `UrpResponseV2` before any response-phase non-stream transform executes.
 
@@ -953,7 +953,7 @@ SSF-4. The transform affects only downstream SSE emitted by Monoize.
 
 SSF-5. Non-stream requests remain semantically unchanged.
 
-SSF-6. The transform MUST preserve downstream protocol correctness for Responses, Chat Completions, and Anthropic Messages SSE output.
+SSF-6. The transform MUST preserve downstream protocol correctness for Responses, Chat Completions, Anthropic Messages, and Gemini streams. A Gemini JSON array uses the same split payloads as its SSE counterpart.
 
 SSF-7. The transform MUST split oversized string-bearing delta payloads into multiple smaller downstream SSE events of the same downstream protocol event kind, in original order, such that downstream concatenation reconstructs the original logical content. Split decisions MUST use the exact serialized downstream SSE `data:` line length after JSON string escaping and after adding the literal `data: ` prefix.
 

@@ -15,7 +15,7 @@ x-api-key: sk-...
 
 以下の各エンドポイントには `/api` プレフィックスの別名があります。例: `/api/v1/chat/completions`。クライアントが `/api` パスを固定している場合に別名を使います。
 
-どのエンドポイントも任意の上流タイプに到達できます。たとえば、クライアントが `/v1/messages` を呼び出し、ルートが `chat_completion` タイプの Channel でそのモデルを提供する構成が可能です。Monoize は双方向でプロトコルを変換します。意思決定 Channel は例外です。後述の「意思決定」を参照してください。
+Monoize は、対応するプロトコル間で推論のリクエストとレスポンスを変換します。たとえば、`/v1/messages` から `chat_completion` Channel を呼び出せます。トークン数の計測と意思決定では、利用できる Channel が異なります。
 
 Chat ルートは、空の内容を持つ OpenRouter の `configuration_update` メッセージも保持します。ファイルの data URI を Messages 文書に変換するときは MIME タイプを保持します。Messages ストリームは `citations_delta` の引用を保持します。Responses のコンテンツフィルターによる終了は未完了として扱い、長さの制限として報告しません。
 
@@ -272,15 +272,25 @@ Monoize は明示された `thinking` と `output_config` をローカル検証�
 
 `POST /v1/messages/count_tokens` の認証、リダイレクト、モデル制限は `/v1/messages` と同じです。
 
-- Monoize はルート順に `messages` Channel だけを試します。ボディは `model` だけを置き換えて転送します。
+- Monoize はルート順にリクエストを変換して `messages` または `gemini` Channel に送ります。Messages クライアントには `input_tokens` を返します。
 - 該当する Channel がない場合は `404 not_found_error` を返します。Claude Code はその後ローカル推定に切り替えます。
 - このエンドポイントは課金せず、リクエストログを書かず、Channel の健全性も変更しません。
 
-## Gemini 上流
+## Gemini GenerateContent
 
-Channel の上流タイプを `gemini` に設定すると、既存のエンドポイントから Gemini を利用できます。この対応には、公開 Gemini HTTP エンドポイントの追加や Live API は含まれません。
+単一の JSON レスポンスには `/v1beta/models/{model}:generateContent` を使います。`:streamGenerateContent` は JSON 配列をストリーミングします。SSE で受け取るには `?alt=sse` を追加します。`:countTokens` には `contents` または入れ子の `generateContentRequest` を送ります。3 つの POST エンドポイントで `/v1beta` の代わりに `/v1` を使えます。モデルはパスで指定し、ストリーミングの有無はアクション名で決まります。
 
-Monoize は `generateContent` のリクエスト、レスポンス、会話履歴を双方向に変換します。ストリーミングには `streamGenerateContent` SSE を使います。
+認証には `x-goog-api-key` ヘッダーまたは `key` クエリパラメーターを使います。上記のヘッダーも使えます。Monoize はログ記録、キャプチャ、転送の前に `key` クエリパラメーターを削除します。
+
+`GET /v1beta/models` は利用できるモデルを Gemini 形式で返します。`GET /v1beta/models/{model}` は指定したモデルを返します。`GET /v1/models` は従来どおり OpenAI 形式です。
+
+トークン数の計測には `messages` と `gemini` Channel だけを使います。`totalTokens` と、Gemini 上流が報告したキャッシュやモダリティ別のトークン数を返します。計測は課金せず、リクエストログも書きません。
+
+Gemini のエラー形式は `{"error":{"code":404,"message":"model not found","status":"NOT_FOUND"}}` です。SSE は `[DONE]` を送りません。Gemini SDK のパーサーは SSE コメントを処理できないため、Gemini のストリームはハートビートを送りません。プロキシのアイドルタイムアウトは、想定される最も遅い生成時間より長く設定してください。
+
+### Gemini 上流 Channel
+
+Channel タイプを `gemini` に設定すると、対応する推論リクエストを Gemini 上流へ転送できます。Monoize は会話履歴を双方向に変換します。上流のストリーミングには `streamGenerateContent` SSE を使います。Live API には対応していません。
 
 - テキスト、推論、関数呼び出し、関数の結果、対応するメディアは、順序と識別情報を保持します。
 - 他のプロトコルでは、テキストとメディアの思考署名を不透明な推論値として運びます。この値をそのまま再送すると、各署名が元の Part に戻ります。
@@ -538,6 +548,7 @@ Monoize は上流の試行が受理された後に SSE ヘッダーを送りま�
 - `/v1/responses` は `code`、`message`、`param` を持つフラットな `error` イベントを送ります。`[DONE]` はありません。
 - 上流の `response.failed` は `response.failed` のままで、部分出力と使用量を保持します。
 - `/v1/messages` は `request_id` 付きの `error` イベントを送ります。`[DONE]` はありません。
+- Gemini のストリームは、Gemini のエラーオブジェクトを最後の SSE イベントまたは JSON 配列要素として送ります。
 
 ### レート制限ヘッダー
 

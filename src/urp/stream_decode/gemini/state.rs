@@ -22,7 +22,7 @@ use crate::urp::{
     ResponseStatus, TerminalNode, TokenLogprob, ToolCallType, UrpStreamEvent, Usage,
 };
 use axum::http::StatusCode;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
@@ -483,10 +483,18 @@ impl<'a> GeminiStreamState<'a> {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| error.to_string());
-        let extra_body = error
+        let mut extra_body = error
             .as_object()
             .map(|error| split_extra(error, &["code", "message", "status"]))
             .unwrap_or_default();
+        let native_status = error
+            .get("code")
+            .and_then(Value::as_u64)
+            .filter(|status| (400..=599).contains(status))
+            .map(|status| status as u16);
+        if let Some(status) = native_status {
+            extra_body.insert("status".to_owned(), json!(status));
+        }
         let sent = self
             .tx
             .send(UrpStreamEvent::Error {
@@ -502,7 +510,7 @@ impl<'a> GeminiStreamState<'a> {
             StreamTerminalError {
                 code: code.clone(),
                 message: message.clone(),
-                http_status: StatusCode::BAD_GATEWAY.as_u16(),
+                http_status: native_status.unwrap_or(StatusCode::BAD_GATEWAY.as_u16()),
                 error_type: error
                     .get("status")
                     .and_then(Value::as_str)
