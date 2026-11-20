@@ -78,6 +78,7 @@ GEM-7. Usage counters MUST retain existing checked arithmetic and modality accou
 Typed changes and deletions MUST win over retained native usage metadata.
 Streaming usage records are cumulative snapshots and MUST NOT be added together. Metering and decoding use one parser (PG6).
 A Gemini-shaped usage encoder MUST emit the documented UsageMetadata counters and emit Monoize extension counters only when non-zero.
+Each ModalityTokenCount list (`promptTokensDetails`, `cacheTokensDetails`, `toolUsePromptTokensDetails`, `candidatesTokensDetails`) MUST contain one entry for each modality with a non-zero count. The list MUST be absent when no modality has a non-zero count. Reason: other protocols report zero placeholders, for example Chat `prompt_tokens_details.text_tokens: 0`. Zero entries would contradict `promptTokenCount` and `candidatesTokenCount`.
 
 ## Streaming
 

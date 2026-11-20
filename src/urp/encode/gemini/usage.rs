@@ -27,8 +27,8 @@ pub(super) fn encode_usage_metadata(usage: &Usage) -> Value {
             output.modality_breakdown.as_ref(),
         ),
     ] {
-        if let Some(details) = details {
-            obj.insert(key.into(), encode_modality(details));
+        if let Some(entries) = details.map(encode_modality).filter(|entries| !entries.is_empty()) {
+            obj.insert(key.into(), Value::Array(entries));
         }
     }
     for (key, count) in [
@@ -83,19 +83,20 @@ pub(super) fn encode_usage_metadata(usage: &Usage) -> Value {
     Value::Object(obj)
 }
 
-fn encode_modality(details: &ModalityBreakdown) -> Value {
-    Value::Array(
-        [
-            ("TEXT", details.text_tokens),
-            ("IMAGE", details.image_tokens),
-            ("AUDIO", details.audio_tokens),
-            ("VIDEO", details.video_tokens),
-            ("DOCUMENT", details.document_tokens),
-        ]
-        .into_iter()
-        .filter_map(|(modality, count)| {
-            count.map(|count| json!({"modality": modality, "tokenCount": count}))
-        })
-        .collect(),
-    )
+/// GEM-7: zero placeholders from other protocols would contradict the Gemini totals.
+fn encode_modality(details: &ModalityBreakdown) -> Vec<Value> {
+    [
+        ("TEXT", details.text_tokens),
+        ("IMAGE", details.image_tokens),
+        ("AUDIO", details.audio_tokens),
+        ("VIDEO", details.video_tokens),
+        ("DOCUMENT", details.document_tokens),
+    ]
+    .into_iter()
+    .filter_map(|(modality, count)| {
+        count
+            .filter(|&count| count > 0)
+            .map(|count| json!({"modality": modality, "tokenCount": count}))
+    })
+    .collect()
 }
