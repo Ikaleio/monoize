@@ -361,9 +361,11 @@ TCL-4. `ToolResult.tool_type` MUST equal the correlated `ToolCall.tool_type`. A 
 
 TR-1. `ToolResult` is a distinct top-level node. It MUST NOT carry `role`.
 
-TR-2. `ToolResult.call_id` MUST be non-empty and MUST correlate to the originating `ToolCall.call_id` byte-for-byte.
+TR-2. `ToolResult.call_id` MUST be non-empty and MUST correlate to the originating `ToolCall.call_id` byte-for-byte, except for a named uncorrelated result under TR-2a.
 
-TR-3. A terminal node sequence MUST NOT contain two distinct `ToolResult` nodes with the same `call_id`.
+TR-2a. A Responses `function_call_output` input item whose `call_id` is absent, `null`, or `""` is a named uncorrelated result; Codex sends additional context this way, for example `{"type":"function_call_output","namespace":"agent","name":"browser_tabs","output":"…"}`. The decoder MUST decode it as a `ToolResult` with `call_id = ""`, preserving `namespace` and `name`. Such a result correlates to no `ToolCall`.
+
+TR-3. A terminal node sequence MUST NOT contain two distinct `ToolResult` nodes with the same non-empty `call_id`.
 
 TR-4. `ToolResult.content` order is canonical. The encoder MUST preserve that order when rendering a protocol that supports multimodal tool results.
 

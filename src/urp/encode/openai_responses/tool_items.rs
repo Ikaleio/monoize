@@ -104,7 +104,10 @@ pub(super) fn encode_tool_result_item(
     } else if let Some(id) = id {
         obj.insert("id".to_string(), Value::String(id.clone()));
     }
-    obj.insert("call_id".to_string(), Value::String(call_id.clone()));
+    // An empty call id is a named uncorrelated result (TR-2a); upstream rejects `call_id: ""`.
+    if !call_id.is_empty() {
+        obj.insert("call_id".to_string(), Value::String(call_id.clone()));
+    }
     obj.insert("output".to_string(), encode_tool_result_output(content));
     merge_extra(&mut obj, extra_body);
     merge_extra(&mut obj, control_extra);

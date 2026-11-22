@@ -577,7 +577,7 @@ TCI3. When Monoize forwards a request, Monoize MUST forward any tool-calling nod
 TCI4. Immediately before encoding a stateless URP v2 request to an upstream provider, Monoize MUST remove incomplete tool exchanges from `UrpRequestV2.input`:
 
 - remove every `ToolCall` node whose `call_id` does not appear in at least one `ToolResult` node in the same request;
-- remove every `ToolResult` node whose `call_id` does not appear in at least one `ToolCall` node in the same request.
+- remove every `ToolResult` node whose non-empty `call_id` does not appear in at least one `ToolCall` node in the same request. A named uncorrelated result (`urp-v2-flat-structure.spec.md` TR-2a) MUST remain.
 
 TCI5. A request is stateless for TCI4 unless it is a downstream Responses request routed to a `type=responses` upstream and carries non-null `conversation`. For a stateful same-Responses request, Monoize MUST skip TCI4 so that a `function_call_output` whose matching call exists in upstream state remains in the request.
 
@@ -839,6 +839,8 @@ ENC3. Each function `ToolCall` node MUST encode as one top-level Responses `func
 ENC3a. When encoding an upstream Responses create request, Monoize MUST preserve an explicit `status` member from a downstream Responses `function_call` item. It MUST NOT synthesize `status` for a `function_call` that did not contain that member. It MUST omit `status` from every request-side `custom_tool_call` item. Output-side Responses objects and stream events MUST continue to emit `status` according to their response-item lifecycle.
 
 ENC3b. For a same-Responses create request, Monoize MUST preserve both the value and the presence or absence of the top-level `id` member on typed `message`, `function_call`, `custom_tool_call`, `function_call_output`, and `custom_tool_call_output` input items. The request decoder MUST NOT synthesize an item id that the downstream item omitted. The request encoder MUST NOT insert or normalize an item id that the decoded item omitted or supplied. Monoize MUST preserve `call_id` independently of item `id`. Output-side Responses objects and stream events MAY synthesize protocol-required item ids.
+
+ENC3c. The Responses encoder MUST omit the `call_id` member of a `function_call_output` or `custom_tool_call_output` item whose `ToolResult.call_id` is empty (`urp-v2-flat-structure.spec.md` TR-2a). It MUST NOT emit `"call_id": ""`; OpenAI rejects an empty `call_id` with `400 empty_string` but accepts a `function_call_output` without `call_id`.
 
 ENC4. Each maximal run of adjacent ordinary nodes that are not `Reasoning`, not `ToolCall`, and not `ProviderItem`, and that share the same `role`, MAY encode as one Responses `message` item.
 
