@@ -3,7 +3,7 @@ use crate::dashboard_handlers::session_helpers::get_current_user;
 use crate::error::{AppError, AppResult};
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::{IntoResponse, Sse};
 use chrono::{DateTime, NaiveTime, Utc};
@@ -483,6 +483,20 @@ fn max_sse_connections_per_user() -> usize {
         .unwrap_or(5)
 }
 
+fn collect_visible_pending_logs(
+    pending_request_logs: &DashMap<String, crate::users::InsertRequestLog>,
+    is_admin: bool,
+    user_id: &str,
+) -> Vec<crate::users::InsertRequestLog> {
+    let mut pending: Vec<_> = pending_request_logs
+        .iter()
+        .filter(|entry| is_admin || entry.value().user_id == user_id)
+        .map(|entry| entry.value().clone())
+        .collect();
+    pending.sort_by_key(|log| std::cmp::Reverse(log.created_at));
+    pending
+}
+
 pub async fn stream_request_logs(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -497,14 +511,9 @@ pub async fn stream_request_logs(
     let capture_receiver = state.request_capture.subscribe_ready();
     let capture_user_id = user_id.clone();
     let runtime = state.monoize_runtime.clone();
+    let pending_request_logs = state.pending_request_logs.clone();
 
-    let mut initial_pending: Vec<_> = state
-        .pending_request_logs
-        .iter()
-        .filter(|entry| is_admin || entry.value().user_id == user_id)
-        .map(|entry| entry.value().clone())
-        .collect();
-    initial_pending.sort_by_key(|log| std::cmp::Reverse(log.created_at));
+    let initial_pending = collect_visible_pending_logs(&pending_request_logs, is_admin, &user_id);
     let initial_event = if initial_pending.is_empty() {
         Event::default().comment("ready")
     } else {
@@ -515,8 +524,38 @@ pub async fn stream_request_logs(
     };
 
     let live_stream = stream::unfold(
-        (receiver, is_admin, user_id, guard, runtime),
-        |(mut receiver, is_admin, user_id, guard, runtime)| async move {
+        (
+            receiver,
+            is_admin,
+            user_id,
+            guard,
+            runtime,
+            pending_request_logs,
+            None::<Event>,
+        ),
+        |(
+            mut receiver,
+            is_admin,
+            user_id,
+            guard,
+            runtime,
+            pending_request_logs,
+            mut queued_event,
+        )| async move {
+            if let Some(event) = queued_event.take() {
+                return Some((
+                    Ok::<Event, Infallible>(event),
+                    (
+                        receiver,
+                        is_admin,
+                        user_id,
+                        guard,
+                        runtime,
+                        pending_request_logs,
+                        queued_event,
+                    ),
+                ));
+            }
             loop {
                 match receiver.recv().await {
                     Ok(batch) => {
@@ -538,14 +577,36 @@ pub async fn stream_request_logs(
                         let event = log_batch_event(filtered, is_admin, mask_batch);
                         return Some((
                             Ok::<Event, Infallible>(event),
-                            (receiver, is_admin, user_id, guard, runtime),
+                            (
+                                receiver,
+                                is_admin,
+                                user_id,
+                                guard,
+                                runtime,
+                                pending_request_logs,
+                                queued_event,
+                            ),
                         ));
                     }
                     Err(RecvError::Lagged(_)) => {
+                        let pending =
+                            collect_visible_pending_logs(&pending_request_logs, is_admin, &user_id);
+                        if !pending.is_empty() {
+                            let mask_batch = !is_admin && runtime.read().await.mask_sensitive_info;
+                            queued_event = Some(log_batch_event(pending, is_admin, mask_batch));
+                        }
                         let event = Event::default().event("resync").data("{}");
                         return Some((
                             Ok::<Event, Infallible>(event),
-                            (receiver, is_admin, user_id, guard, runtime),
+                            (
+                                receiver,
+                                is_admin,
+                                user_id,
+                                guard,
+                                runtime,
+                                pending_request_logs,
+                                queued_event,
+                            ),
                         ));
                     }
                     Err(RecvError::Closed) => return None,
@@ -575,9 +636,22 @@ pub async fn stream_request_logs(
     let stream = stream::once(async move { Ok::<Event, Infallible>(initial_event) })
         .chain(stream::select(live_stream, capture_stream));
 
-    Ok(Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
-        .into_response())
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response.headers_mut().insert(
+        header::HeaderName::from_static("x-accel-buffering"),
+        HeaderValue::from_static("no"),
+    );
+    Ok(response)
 }
 
 fn log_batch_event(

@@ -169,6 +169,8 @@ export function RequestLogsPage() {
 	const pendingPageDataRef = useRef<RequestLogsResponse | null>(null)
 	const pendingNewestDataRef = useRef<RequestLogsResponse | null>(null)
 	const pendingSSERef = useRef<RequestLog[]>([])
+	const activePendingRef = useRef<Map<string, RequestLog>>(new Map())
+	const pendingPruneRef = useRef(false)
 	// Points at the latest buffer flush; event callbacks call it so they stay stable.
 	const flushBuffersRef = useRef<() => void>(() => {})
 	// LOGS-7: while the table is scrolled away from the top, live rows are
@@ -219,18 +221,6 @@ export function RequestLogsPage() {
 	}, [urlStatus, urlModel, urlApiKeyId, urlChannelId, urlUsername, urlQ, timeFrom, timeTo])
 
 	const filterKey = useMemo(() => JSON.stringify(activeFilters), [activeFilters])
-
-	useEffect(() => {
-		// eslint-disable-next-line react-hooks/set-state-in-effect -- reset local pagination when the serialized filter input changes
-		setRequestOffset(0)
-		setLoadedLogs([])
-		setTotalCount(0)
-		setTotalCharge('0')
-		pendingPageDataRef.current = null
-		pendingNewestDataRef.current = null
-		captureReadyRef.current.clear()
-		atTopRef.current = true
-	}, [filterKey])
 
 	// LOGS-1 / FL38a: tooltip pause applies to periodic and focus revalidation
 	// only. SWR checks `isPaused` synchronously when a new key starts its first
@@ -332,6 +322,28 @@ export function RequestLogsPage() {
 		[activeFilters]
 	)
 
+	const matchesActiveFiltersRef = useRef(matchesActiveFilters)
+	useLayoutEffect(() => {
+		matchesActiveFiltersRef.current = matchesActiveFilters
+	}, [matchesActiveFilters])
+
+	useEffect(() => {
+		// eslint-disable-next-line react-hooks/set-state-in-effect -- reset local pagination when the serialized filter input changes
+		setRequestOffset(0)
+		const matchingPending = Array.from(activePendingRef.current.values()).filter(log =>
+			matchesActiveFiltersRef.current(log)
+		)
+		setLoadedLogs(matchingPending)
+		setTotalCount(0)
+		setTotalCharge('0')
+		pendingPageDataRef.current = null
+		pendingNewestDataRef.current = null
+		pendingSSERef.current = []
+		pendingPruneRef.current = false
+		captureReadyRef.current.clear()
+		atTopRef.current = true
+	}, [filterKey])
+
 	/**
 	 * Re-prepend SSE-only pending items that the server response doesn't know about.
 	 * Pending items are never persisted to the DB (RL1a-1), so SWR responses will
@@ -341,16 +353,36 @@ export function RequestLogsPage() {
 		(prev: RequestLog[], serverData: RequestLog[]): RequestLog[] => {
 			const serverRequestIds = new Set(serverData.map(log => log.request_id).filter(Boolean))
 			const serverIds = new Set(serverData.map(log => log.id))
-			const pendingItems = prev.filter(
-				log =>
+			for (const log of serverData) {
+				if (log.status !== 'pending' && log.request_id) {
+					activePendingRef.current.delete(log.request_id)
+				}
+			}
+			const pendingByKey = new Map<string, RequestLog>()
+			for (const log of activePendingRef.current.values()) {
+				if (
+					!serverIds.has(log.id) &&
+					(!log.request_id || !serverRequestIds.has(log.request_id)) &&
+					matchesActiveFilters(log)
+				) {
+					pendingByKey.set(log.request_id || log.id, log)
+				}
+			}
+			for (const log of prev) {
+				if (
 					log.status === 'pending' &&
 					!serverIds.has(log.id) &&
-					(!log.request_id || !serverRequestIds.has(log.request_id))
-			)
-			if (pendingItems.length === 0) return serverData
-			return [...pendingItems, ...serverData]
+					(!log.request_id || !serverRequestIds.has(log.request_id)) &&
+					matchesActiveFilters(log)
+				) {
+					const key = log.request_id || log.id
+					if (!pendingByKey.has(key)) pendingByKey.set(key, log)
+				}
+			}
+			if (pendingByKey.size === 0) return serverData
+			return [...pendingByKey.values(), ...serverData]
 		},
-		[]
+		[matchesActiveFilters]
 	)
 
 	const applyCaptureReadiness = useCallback(
@@ -407,6 +439,7 @@ export function RequestLogsPage() {
 							log.status === 'pending' &&
 							next[existingIndex].status !== 'pending'
 						) {
+							activePendingRef.current.delete(log.request_id)
 							continue
 						}
 						if (existingIndex >= 0) {
@@ -433,15 +466,48 @@ export function RequestLogsPage() {
 		[matchesActiveFilters, applyCaptureReadiness]
 	)
 
+	const pruneStalePendingLogs = useCallback(() => {
+		setLoadedLogs(prev => {
+			let changed = false
+			const next = prev.filter(log => {
+				if (log.status !== 'pending') return true
+				const keep = activePendingRef.current.has(log.request_id || log.id)
+				if (!keep) changed = true
+				return keep
+			})
+			return changed ? next : prev
+		})
+	}, [])
+
 	const receiveSSELogs = useCallback(
-		(logs: RequestLog[]) => {
+		(logs: RequestLog[], initial = false) => {
+			if (initial) {
+				activePendingRef.current.clear()
+			}
+			for (const log of logs) {
+				const key = log.request_id || log.id
+				if (log.status === 'pending') {
+					activePendingRef.current.set(key, log)
+				} else {
+					activePendingRef.current.delete(key)
+				}
+			}
+
 			if (openTooltipIdsRef.current.size > 0 || !atTopRef.current) {
-				pendingSSERef.current = [...pendingSSERef.current, ...logs]
+				if (initial) {
+					pendingPruneRef.current = true
+				}
+				if (logs.length > 0) {
+					pendingSSERef.current = [...pendingSSERef.current, ...logs]
+				}
 				return
+			}
+			if (initial) {
+				pruneStalePendingLogs()
 			}
 			prependSSELogs(logs)
 		},
-		[prependSSELogs]
+		[prependSSELogs, pruneStalePendingLogs]
 	)
 
 	// Server responses are either applied or buffered per FL38 (tooltip open) and
@@ -468,8 +534,15 @@ export function RequestLogsPage() {
 				return preservePendingItems(prev, rows)
 			}
 			const newestIds = new Set(rows.map(log => log.id))
-			const tail = prev.filter(log => !newestIds.has(log.id))
-			return [...rows, ...tail].slice(0, data.total)
+			const newestRequestIds = new Set(rows.map(log => log.request_id).filter(Boolean))
+			const tail = prev.filter(
+				log =>
+					log.status !== 'pending' &&
+					!newestIds.has(log.id) &&
+					(!log.request_id || !newestRequestIds.has(log.request_id))
+			)
+			const persisted = [...rows, ...tail].slice(0, Math.max(data.total, rows.length))
+			return preservePendingItems(prev, persisted)
 		})
 	}
 
@@ -513,8 +586,15 @@ export function RequestLogsPage() {
 	useEffect(() => {
 		if (pageData) onPageData(pageData)
 	}, [pageData])
-	const pageSettled = pageData != null || logsError != null
-	const { data: providers } = useProviders(undefined, isAdmin && pageSettled)
+	// FL37d: gate SSE and fallback polling on the initial REST fetch only;
+	// subsequent filter changes and pagination must keep the SSE stream open.
+	const [initialPageSettled, setInitialPageSettled] = useState(
+		() => pageData != null || logsError != null
+	)
+	if (!initialPageSettled && (pageData != null || logsError != null)) {
+		setInitialPageSettled(true)
+	}
+	const { data: providers } = useProviders(undefined, isAdmin && initialPageSettled)
 	const affinityTargetNames = useMemo(() => {
 		const names = new Map<string, string>()
 		for (const provider of providers ?? []) {
@@ -529,7 +609,7 @@ export function RequestLogsPage() {
 	}, [providers])
 
 	const { connected: sseConnected } = useRequestLogSSE(
-		automaticUpdatesEnabled && pageSettled,
+		automaticUpdatesEnabled && initialPageSettled,
 		receiveStreamEvent
 	)
 
@@ -538,9 +618,9 @@ export function RequestLogsPage() {
 		0,
 		activeFilters,
 		{
-			refreshInterval: automaticUpdatesEnabled && pageSettled && !sseConnected ? 3000 : 0,
-			revalidateOnFocus: automaticUpdatesEnabled && pageSettled,
-			revalidateOnReconnect: automaticUpdatesEnabled && pageSettled,
+			refreshInterval: automaticUpdatesEnabled && initialPageSettled && !sseConnected ? 3000 : 0,
+			revalidateOnFocus: automaticUpdatesEnabled && initialPageSettled,
+			revalidateOnReconnect: automaticUpdatesEnabled && initialPageSettled,
 			isPaused: isTooltipPaused,
 			onSuccess: handleNewestResponse
 		}
@@ -557,13 +637,18 @@ export function RequestLogsPage() {
 		void mutateNewest()
 	}, [automaticUpdatesEnabled, mutate, mutateNewest])
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		streamEventHandlerRef.current = sseEvent => {
 			if (!automaticUpdatesEnabled) return
 
 			if (sseEvent.type === 'resync') {
 				void mutate()
 				void mutateNewest()
+				return
+			}
+
+			if (sseEvent.type === 'pending_empty') {
+				receiveSSELogs([], true)
 				return
 			}
 
@@ -579,7 +664,7 @@ export function RequestLogsPage() {
 				return
 			}
 
-			receiveSSELogs(sseEvent.logs)
+			receiveSSELogs(sseEvent.logs, sseEvent.initial === true)
 		}
 	}, [automaticUpdatesEnabled, mutate, mutateNewest, receiveSSELogs])
 
@@ -613,6 +698,11 @@ export function RequestLogsPage() {
 		if (bufferedPage && (bufferedPage.offset !== 0 || atTopNow)) {
 			pendingPageDataRef.current = null
 			applyPageData(bufferedPage)
+		}
+
+		if (atTopNow && pendingPruneRef.current) {
+			pendingPruneRef.current = false
+			pruneStalePendingLogs()
 		}
 
 		if (atTopNow && pendingSSERef.current.length > 0) {

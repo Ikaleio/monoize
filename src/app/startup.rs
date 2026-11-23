@@ -34,7 +34,7 @@ pub async fn load_state_with_runtime(runtime: RuntimeConfig) -> AppResult<AppSta
 
     let db = initialize_database(&runtime, is_replica).await?;
 
-    let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(64);
+    let (log_broadcast, _) = tokio::sync::broadcast::channel::<Vec<InsertRequestLog>>(512);
     let custom_transform_store = CustomTransformStore::new(db.clone())
         .await
         .map_err(|err| startup_error("custom_transform_store_init_failed", err))?;

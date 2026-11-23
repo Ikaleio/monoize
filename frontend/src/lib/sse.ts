@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import useSWRSubscription from "swr/subscription";
 import type { SWRSubscriptionOptions } from "swr/subscription";
 import type { RequestLog } from "./api";
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+const CONNECT_TIMEOUT_MS = 30_000;
 const STALE_STREAM_TIMEOUT_MS = 45_000;
 
 export type RequestLogStreamEvent =
-  | { type: "log_batch"; logs: RequestLog[] }
+  | { type: "log_batch"; logs: RequestLog[]; initial?: boolean }
+  | { type: "pending_empty" }
   | { type: "capture_ready"; request_id: string; user_id: string }
   | { type: "resync" };
 
@@ -20,7 +22,7 @@ export function useRequestLogSSE(
 ) {
   const [connected, setConnected] = useState(false);
   const onEventRef = useRef(onEvent);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onEventRef.current = onEvent;
   }, [onEvent]);
 
@@ -31,9 +33,9 @@ export function useRequestLogSSE(
     let cancelled = false;
     let reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
     let staleTimer: ReturnType<typeof setTimeout> | null = null;
     let controller: AbortController | null = null;
-    let reconnectImmediately = false;
 
     // Deliver every frame before React can coalesce subscription state updates.
     const publish = (event: RequestLogStreamEvent) => {
@@ -50,6 +52,15 @@ export function useRequestLogSSE(
       reconnectTimer = null;
     };
 
+    const clearConnectTimer = () => {
+      if (!connectTimer) {
+        return;
+      }
+
+      clearTimeout(connectTimer);
+      connectTimer = null;
+    };
+
     const clearStaleTimer = () => {
       if (!staleTimer) {
         return;
@@ -59,16 +70,14 @@ export function useRequestLogSSE(
       staleTimer = null;
     };
 
-    const scheduleReconnect = (delayOverrideMs?: number) => {
+    const scheduleReconnect = () => {
       if (cancelled) {
         return;
       }
 
       setConnected(false);
-      const delay = delayOverrideMs ?? reconnectDelayMs;
-      if (delayOverrideMs === undefined) {
-        reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
-      }
+      const delay = reconnectDelayMs;
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
       clearReconnectTimer();
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
@@ -76,23 +85,29 @@ export function useRequestLogSSE(
       }, delay);
     };
 
-    const armStaleTimer = () => {
+    const armConnectTimer = (target: AbortController) => {
+      clearConnectTimer();
+      connectTimer = setTimeout(() => {
+        connectTimer = null;
+        if (cancelled || controller !== target) {
+          return;
+        }
+        target.abort();
+      }, CONNECT_TIMEOUT_MS);
+    };
+
+    const armStaleTimer = (target: AbortController) => {
       clearStaleTimer();
       if (typeof document !== "undefined" && document.visibilityState !== "visible") {
         return;
       }
 
       staleTimer = setTimeout(() => {
-        if (cancelled) {
+        staleTimer = null;
+        if (cancelled || controller !== target) {
           return;
         }
-
-        reconnectImmediately = true;
-        publish({ type: "resync" });
-        controller?.abort();
-        if (!controller) {
-          scheduleReconnect(0);
-        }
+        restartNow();
       }, STALE_STREAM_TIMEOUT_MS);
     };
 
@@ -101,26 +116,32 @@ export function useRequestLogSSE(
         return;
       }
 
-      publish({ type: "resync" });
+      clearReconnectTimer();
+      clearConnectTimer();
+      clearStaleTimer();
       reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
-      reconnectImmediately = true;
       setConnected(false);
-      controller?.abort();
-      if (!controller) {
-        scheduleReconnect(0);
-      }
+      const previous = controller;
+      controller = null;
+      previous?.abort();
+      publish({ type: "resync" });
+      void connect();
     };
 
-    const parseEventBlock = (block: string) => {
+    const parseEventBlock = (block: string, isInitialFrame: boolean): boolean => {
       if (!block.trim()) {
-        return;
+        return false;
       }
 
       let eventName = "";
+      let sawReadyComment = false;
       const dataLines: string[] = [];
 
       for (const line of block.split("\n")) {
         if (line.startsWith(":")) {
+          if (line.slice(1).trim() === "ready") {
+            sawReadyComment = true;
+          }
           continue;
         }
 
@@ -135,23 +156,30 @@ export function useRequestLogSSE(
       }
 
       if (!eventName) {
-        return;
+        if (isInitialFrame && sawReadyComment) {
+          publish({ type: "pending_empty" });
+        }
+        return true;
       }
 
       if (eventName === "log_batch") {
         const payload = dataLines.join("\n");
         if (!payload) {
-          return;
+          return true;
         }
 
         try {
           const logs = JSON.parse(payload) as RequestLog[];
-          publish({ type: "log_batch", logs });
+          publish(
+            isInitialFrame
+              ? { type: "log_batch", logs, initial: true }
+              : { type: "log_batch", logs },
+          );
         } catch {
-          return;
+          return true;
         }
 
-        return;
+        return true;
       }
 
       if (eventName === "capture_ready") {
@@ -172,14 +200,15 @@ export function useRequestLogSSE(
             });
           }
         } catch {
-          return;
+          return true;
         }
-        return;
+        return true;
       }
 
       if (eventName === "resync") {
         publish({ type: "resync" });
       }
+      return true;
     };
 
     const connect = async () => {
@@ -187,55 +216,83 @@ export function useRequestLogSSE(
         return;
       }
 
-      controller = new AbortController();
+      clearReconnectTimer();
+      const previous = controller;
+      const currentController = new AbortController();
+      controller = currentController;
+      previous?.abort();
+
       const decoder = new TextDecoder();
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
       try {
         clearStaleTimer();
+        armConnectTimer(currentController);
         const response = await fetch("/api/dashboard/request-logs/stream", {
           credentials: "include",
-          signal: controller.signal,
+          cache: "no-store",
+          headers: {
+            Accept: "text/event-stream",
+            "Cache-Control": "no-transform",
+          },
+          signal: currentController.signal,
         });
+        clearConnectTimer();
+
+        if (cancelled || controller !== currentController) {
+          return;
+        }
 
         if (!response.ok || !response.body) {
           throw new Error(`SSE stream failed with status ${response.status}`);
         }
 
         setConnected(true);
-        reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
-        armStaleTimer();
+        armStaleTimer(currentController);
 
-        const reader = response.body.getReader();
+        reader = response.body.getReader();
         let buffer = "";
+        let sawInitialFrame = false;
 
-        while (!cancelled) {
+        while (!cancelled && controller === currentController) {
           const { done, value } = await reader.read();
           if (done) {
             break;
           }
 
-          armStaleTimer();
+          if (cancelled || controller !== currentController) {
+            break;
+          }
+
+          reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+          armStaleTimer(currentController);
           buffer += decoder.decode(value, { stream: true }).replaceAll("\r", "");
 
           let eventBoundary = buffer.indexOf("\n\n");
           while (eventBoundary !== -1) {
             const rawEvent = buffer.slice(0, eventBoundary);
             buffer = buffer.slice(eventBoundary + 2);
-            parseEventBlock(rawEvent);
+            if (parseEventBlock(rawEvent, !sawInitialFrame)) {
+              sawInitialFrame = true;
+            }
             eventBoundary = buffer.indexOf("\n\n");
           }
         }
 
-        buffer += decoder.decode().replaceAll("\r", "");
-        let eventBoundary = buffer.indexOf("\n\n");
-        while (eventBoundary !== -1) {
-          const rawEvent = buffer.slice(0, eventBoundary);
-          buffer = buffer.slice(eventBoundary + 2);
-          parseEventBlock(rawEvent);
-          eventBoundary = buffer.indexOf("\n\n");
+        if (!cancelled && controller === currentController) {
+          buffer += decoder.decode().replaceAll("\r", "");
+          let eventBoundary = buffer.indexOf("\n\n");
+          while (eventBoundary !== -1) {
+            const rawEvent = buffer.slice(0, eventBoundary);
+            buffer = buffer.slice(eventBoundary + 2);
+            if (parseEventBlock(rawEvent, !sawInitialFrame)) {
+              sawInitialFrame = true;
+            }
+            eventBoundary = buffer.indexOf("\n\n");
+          }
         }
       } catch (streamError) {
-        if (cancelled) {
+        if (cancelled || controller !== currentController) {
           return;
         }
 
@@ -245,12 +302,16 @@ export function useRequestLogSSE(
 
         next(streamError instanceof Error ? streamError : new Error("SSE stream failed"));
       } finally {
-        controller = null;
-        clearStaleTimer();
-        if (!cancelled) {
-          const delayOverrideMs = reconnectImmediately ? 0 : undefined;
-          reconnectImmediately = false;
-          scheduleReconnect(delayOverrideMs);
+        if (reader) {
+          void reader.cancel().catch(() => {});
+        }
+        if (controller === currentController) {
+          controller = null;
+          clearConnectTimer();
+          clearStaleTimer();
+          if (!cancelled) {
+            scheduleReconnect();
+          }
         }
       }
     };
@@ -264,8 +325,15 @@ export function useRequestLogSSE(
       restartNow();
     };
 
+    const handleOnline = () => {
+      restartNow();
+    };
+
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", handleVisibilityChange);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
     }
 
     void connect();
@@ -274,11 +342,17 @@ export function useRequestLogSSE(
       cancelled = true;
       setConnected(false);
       clearReconnectTimer();
+      clearConnectTimer();
       clearStaleTimer();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
       }
-      controller?.abort();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", handleOnline);
+      }
+      const active = controller;
+      controller = null;
+      active?.abort();
     };
   };
 
