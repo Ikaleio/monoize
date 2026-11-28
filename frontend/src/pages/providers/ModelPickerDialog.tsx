@@ -128,9 +128,9 @@ function ModelPickerDialogContent({
 		: t('providers.pickerNoExistingModels')
 
 	return (
-		<DialogContent className='max-h-[85vh] flex flex-col overflow-hidden max-w-4xl'>
-			<DialogHeader>
-				<div className='flex flex-wrap items-center justify-between gap-3 pr-8'>
+		<DialogContent className='max-h-[calc(100dvh-2rem)] max-w-4xl overflow-hidden px-4 sm:max-h-[min(85dvh,calc(100dvh-3rem))] sm:px-6'>
+			<DialogHeader className='shrink-0'>
+				<div className='flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:pr-8'>
 					<DialogTitle>{t('providers.selectModels')}</DialogTitle>
 					<SegmentedControl
 						value={tab}
@@ -144,7 +144,7 @@ function ModelPickerDialogContent({
 						}
 					/>
 				</div>
-				<DialogDescription>
+				<DialogDescription className='break-words'>
 					{providerName}
 					{fetched?.compact_scheme === 'openai_compact_sibling'
 						? ` — ${t('providers.compactSchemeSibling')}`
@@ -154,7 +154,7 @@ function ModelPickerDialogContent({
 				</DialogDescription>
 			</DialogHeader>
 
-			<div className='flex flex-col gap-4'>
+			<div className='min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain'>
 				<div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
 					<div className='relative min-w-0 flex-1'>
 						<Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' aria-hidden='true' />
@@ -166,7 +166,7 @@ function ModelPickerDialogContent({
 							onChange={event => setSearch(event.target.value)}
 						/>
 					</div>
-					<div className='flex gap-2'>
+					<div className='flex flex-wrap gap-2'>
 						<Button type='button' variant='outline' size='sm' disabled={filtered.length === 0} onClick={() => setFiltered(true)}>
 							{t('providers.pickerSelectFiltered')}
 						</Button>
@@ -198,7 +198,7 @@ function ModelPickerDialogContent({
 								</Button>
 							</AlertDescription>
 						</Alert>
-					: 	<StackedModelList listClassName='max-h-none h-[clamp(220px,45vh,420px)] gap-2'>
+					: 	<StackedModelList listClassName='max-h-none overflow-visible'>
 							{tab === 'new' && loading ?
 								<div className='w-full py-8 text-center text-sm text-muted-foreground'>
 									{t('providers.fetchingModels')}
@@ -234,9 +234,11 @@ function ModelPickerDialogContent({
 				</div>
 			</div>
 
-			<DialogFooter className='items-center gap-2 sm:justify-between'>
-				<p className='text-xs text-muted-foreground'>{hasChanges ? null : t('providers.pickerNoChanges')}</p>
-				<div className='flex flex-col-reverse gap-2 sm:flex-row'>
+			<DialogFooter className='shrink-0 flex-col items-end gap-2 sm:items-center sm:space-x-0'>
+				{hasChanges ? null : (
+					<p className='self-start text-xs text-muted-foreground sm:mr-auto sm:self-auto'>{t('providers.pickerNoChanges')}</p>
+				)}
+				<div className='flex flex-wrap justify-end gap-2'>
 					<Button variant='outline' onClick={() => onOpenChange(false)}>
 						{t('common.cancel')}
 					</Button>

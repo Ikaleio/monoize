@@ -337,11 +337,11 @@ PL13. The selected Channel model section MUST include an explicit "Fetch upstrea
 - The `existing` tab MUST state that unchecking a model removes it from the Channel.
 - A fetch failure MUST render an error state in the list area ("无法从上游获取模型", localized error, retry action) and MUST NOT render an empty-state text. The empty states are distinct: "上游没有新模型" (fetched list has no new model), "没有已有模型" (existing tab empty), "没有匹配的模型" (search filtered everything out).
 - When any listed model is unpriced, a legend line MUST explain the warning style and link to `/dashboard/models?tab=unpriced`.
-- The dialog MUST be a column flex layout: header and footer fixed, the list `min-h-0 flex-1` with internal scrolling, so footer buttons are never clipped at 390px width.
+- The dialog MUST fit within the dynamic viewport height minus the dialog margins. The header and footer MUST remain visible while the body scrolls.
+- The search controls, model results, and pricing legend MUST share one vertically scrollable body. Touch scrolling in the body MUST reach the last result and the legend without moving the footer.
 - Dialog MUST initialize selection from the keys of the current Channel `models` object.
 - Dialog MUST allow selecting fetched models for the current Channel.
 - While the dialog remains open, a successful fetched model list MUST remain visible and MUST NOT be cleared by unrelated parent rerenders.
-- Dialog model list container MUST have a bounded positive height with internal scrolling so fetched rows are visible immediately after load.
 - Dialog model list items MUST render as compact stacked badges (wrapping rows), not forced single-column rows.
 - Confirming selection MUST set only the current Channel `models` object.
 - Newly selected model IDs MUST receive default `{ redirect: null, multiplier: "1" }` entries.
@@ -417,7 +417,7 @@ PL19. Model badge lists on the Providers page MUST use a wrapping stacked-badge 
 - Model-list containers MUST keep symmetric top/bottom inner spacing so the badge block appears visually centered and not top- or bottom-heavy.
 - A detail overlay attached to an individual visible model badge does not violate this rule. The model badge itself MUST remain directly visible in the stacked list.
 
-PL19a. The expanded provider-card model list, the selected Channel model editor, and the model picker dialog result area MUST render their badge collections through one shared stacked model list container component (`StackedModelList`), so that border, inner padding, wrap behavior, and item gap are identical on all three surfaces. The bounded height of the inner scroll region MAY be overridden per surface (the model picker uses a taller viewport-relative height); border, padding, and wrap behavior MUST come from the shared component.
+PL19a. The expanded provider-card model list, the selected Channel model editor, and the model picker dialog result area MUST render their badge collections through one shared stacked model list container component (`StackedModelList`), so that border, inner padding, wrap behavior, and item gap are identical on all three surfaces. The model picker MUST use the dialog body as its scroll region per PL13.
 
 PL20. Provider edit dialog channel list MUST use virtualized rendering (`react-virtuoso`) with embedded scrolling.
 
